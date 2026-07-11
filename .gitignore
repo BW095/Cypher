@@ -1,0 +1,8 @@
+.env
+.vscode/
+.idea/
+node_modules/
+dist/
+build/
+*.log
+identifier.sqlite
