@@ -3,13 +3,13 @@ from docling.document_converter import DocumentConverter
 from app.ingestion.canonical_document import CanonicalDocument
 
 
-# from app.ai.ocr import OCRWrapper # We will build this wrapper later
+from app.ai.ocr import OCRWrapper # We will build this wrapper later
 
 class PDFProcessor:
     def __init__(self):
         # Initialize the IBM Docling converter
         self.converter = DocumentConverter()
-        # self.fallback_ocr = OCRWrapper()
+        self.fallback_ocr = OCRWrapper()
 
     def process(self, file_path: str) -> CanonicalDocument:
         print(f"Processing PDF with Docling: {file_path}")
@@ -52,8 +52,7 @@ class PDFProcessor:
 
     def _fallback_process(self, file_path: str) -> CanonicalDocument:
         # 1. Use PaddleOCR wrapper to brute-force read the PDF pages
-        # ocr_text = self.fallback_ocr.extract_from_pdf(file_path)
-        ocr_text = "[PaddleOCR Extracted Text Placeholder]"
+        ocr_text = self.fallback_ocr.extract_from_pdf(file_path)
 
         return CanonicalDocument(
             file_path=file_path,

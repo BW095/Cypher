@@ -1,15 +1,13 @@
 import os
+import ffmpeg
 from app.ingestion.canonical_document import CanonicalDocument
-
-
-# from app.ai.whisper import WhisperWrapper
-# from app.ai.vision import VisionWrapper
-# import ffmpeg  # Requires ffmpeg-python
+from app.ai.audio_model import WhisperWrapper
+from app.ai.vision_model import QwenVLWrapper
 
 class VideoProcessor:
     def __init__(self):
-        # self.whisper = WhisperWrapper()
-        # self.vision = VisionWrapper()
+        self.whisper = WhisperWrapper()
+        self.vision = QwenVLWrapper()
         self.temp_dir = "./data/temp"
         os.makedirs(self.temp_dir, exist_ok=True)
 
@@ -21,17 +19,19 @@ class VideoProcessor:
         frame_path = os.path.join(self.temp_dir, f"{base_name}_frame.jpg")
 
         # 1. Extract audio and key frames using FFmpeg
-        # (Placeholder for FFmpeg subprocess logic)
         self._extract_audio(file_path, audio_path)
         self._extract_key_frames(file_path, frame_path)
 
         # 2. Transcribe Audio
-        # transcript = self.whisper.transcribe(audio_path)
-        transcript = "[Whisper Video Audio Transcript Placeholder]"
+        transcript = ""
+        if os.path.exists(audio_path):
+            transcript = self.whisper.transcribe(audio_path)
 
         # 3. Analyze Frames
-        # frame_desc = self.vision.describe_image(frame_path)
-        frame_desc = "[Qwen-VL Keyframe Description Placeholder]"
+        frame_desc = ""
+        if os.path.exists(frame_path):
+            prompt = "Describe this keyframe from an industrial video. Identify equipment and actions."
+            frame_desc = self.vision.analyze_image(frame_path, prompt)
 
         # 4. Cleanup temp files
         if os.path.exists(audio_path): os.remove(audio_path)
@@ -47,10 +47,26 @@ class VideoProcessor:
         )
 
     def _extract_audio(self, video_path: str, output_path: str):
-        # ffmpeg.input(video_path).output(output_path, acodec='pcm_s16le', ac=1, ar='16k').run(quiet=True)
-        pass
+        try:
+            (
+                ffmpeg
+                .input(video_path)
+                .output(output_path, acodec='pcm_s16le', ac=1, ar='16k')
+                .overwrite_output()
+                .run(quiet=True)
+            )
+        except Exception as e:
+            print(f"Failed to extract audio from video: {e}")
 
     def _extract_key_frames(self, video_path: str, output_path: str):
-        # Extracts a representative frame (e.g., at the 5-second mark)
-        # ffmpeg.input(video_path, ss='00:00:05').output(output_path, vframes=1).run(quiet=True)
-        pass
+        try:
+            # Extracts a representative frame at the 5-second mark
+            (
+                ffmpeg
+                .input(video_path, ss='00:00:05')
+                .output(output_path, vframes=1)
+                .overwrite_output()
+                .run(quiet=True)
+            )
+        except Exception as e:
+            print(f"Failed to extract keyframe from video: {e}")

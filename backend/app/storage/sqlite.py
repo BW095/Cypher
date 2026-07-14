@@ -30,6 +30,7 @@ class SQLiteStorage:
                 INSERT INTO documents (file_path, file_type, status, ingested_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET 
+                    file_type=excluded.file_type, -- FIX: Update file_type here
                     status=excluded.status, 
                     ingested_at=excluded.ingested_at
             """, (file_path, file_type, status, datetime.now()))

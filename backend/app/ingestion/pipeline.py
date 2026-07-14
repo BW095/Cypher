@@ -1,9 +1,11 @@
+# backend/app/ingestion/pipeline.py
 from app.ingestion.dispatcher import Dispatcher
 from app.ingestion.chunking import Chunker
 from app.ai.embeddings import BGEWrapper
 from app.storage.qdrant import QdrantStorage
 from app.storage.sqlite import SQLiteStorage
-
+from app.storage.neo4j import Neo4jStorage  # Ensure this is imported
+from app.ai.entity_extractor import EntityExtractor
 class IngestionPipeline:
     def __init__(self):
         self.dispatcher = Dispatcher()
@@ -11,7 +13,8 @@ class IngestionPipeline:
         self.tracker = SQLiteStorage()
         self.embedding_model = BGEWrapper()
         self.qdrant_db = QdrantStorage()
-
+        self.neo4j_db = Neo4jStorage()
+        self.entity_extractor = EntityExtractor()
     def process_file(self, file_path: str):
         try:
             print(f"Starting pipeline for: {file_path}")
@@ -36,14 +39,15 @@ class IngestionPipeline:
 
                 # 5. Store in Vector DB
                 self.qdrant_db.store_chunks(chunks, embeddings)
+                canonical_doc = self.entity_extractor.process_document(canonical_doc)
 
-            # 6. Mark as completed
+            # 6. FIX: Store Entities and Relationships in Neo4j Graph
+            self.neo4j_db.store_graph(canonical_doc)
+
+            # 7. Mark as completed
             self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "completed")
             print(f"Successfully processed and stored: {file_path}")
 
         except Exception as e:
             self.tracker.add_or_update_document(file_path, "unknown", "failed")
-            print(f"Ingestion failed for {file_path}. Error: {str(e)}")
-
-        except Exception as e:
             print(f"Ingestion failed for {file_path}. Error: {str(e)}")
