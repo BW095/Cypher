@@ -1,122 +1,88 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useCallback, useEffect, useState } from 'react'
+import { api } from './api'
+import Sidebar from './components/Sidebar'
+import ChatView from './components/ChatView'
+import KnowledgeView from './components/KnowledgeView'
+import GraphView from './components/GraphView'
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const [view, setView] = useState('chat') // 'chat' | 'knowledge' | 'graph'
+  const [sessions, setSessions] = useState([])
+  const [activeSessionId, setActiveSessionId] = useState(null)
+  const [health, setHealth] = useState(null)
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await api.sessions())
+    } catch {
+      // Backend not reachable yet — sidebar just stays empty
+    }
+  }, [])
+
+  const refreshHealth = useCallback(async () => {
+    try {
+      setHealth(await api.health())
+    } catch {
+      setHealth(null) // Renders as "offline"
+    }
+  }, [])
+
+  useEffect(() => {
+    const initial = setTimeout(() => {
+      refreshSessions()
+      refreshHealth()
+    }, 0)
+    const timer = setInterval(refreshHealth, 15000)
+    return () => {
+      clearTimeout(initial)
+      clearInterval(timer)
+    }
+  }, [refreshSessions, refreshHealth])
+
+  const handleNewChat = () => {
+    setActiveSessionId(null)
+    setView('chat')
+  }
+
+  const handleSelectSession = (id) => {
+    setActiveSessionId(id)
+    setView('chat')
+  }
+
+  const handleDeleteSession = async (id) => {
+    try {
+      await api.deleteSession(id)
+    } finally {
+      if (id === activeSessionId) setActiveSessionId(null)
+      refreshSessions()
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    <div className="app">
+      <Sidebar
+        view={view}
+        onChangeView={setView}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onNewChat={handleNewChat}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        health={health}
+      />
+      <main className="main">
+        {view === 'chat' && (
+          <ChatView
+            sessionId={activeSessionId}
+            onSessionCreated={(id) => {
+              setActiveSessionId(id)
+              refreshSessions()
+            }}
+          />
+        )}
+        {view === 'knowledge' && <KnowledgeView />}
+        {view === 'graph' && <GraphView />}
+      </main>
+    </div>
   )
 }
-
-export default App
