@@ -446,8 +446,37 @@ textarea {
 }
 
 .msg-body {
-  white-space: pre-wrap;
   overflow-wrap: break-word;
+  line-height: 1.5;
+}
+
+.msg.user .msg-body {
+  white-space: pre-wrap;
+}
+
+.msg.assistant .msg-body p {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.msg.assistant .msg-body p:last-child {
+  margin-bottom: 0;
+}
+
+.msg.assistant .msg-body ul,
+.msg.assistant .msg-body ol {
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding-left: 24px;
+}
+
+.msg.assistant .msg-body li {
+  margin-bottom: 6px;
+}
+
+.msg.assistant .msg-body strong {
+  color: var(--text);
+  font-weight: 650;
 }
 
 .msg.user .msg-body {

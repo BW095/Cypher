@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { api, baseName } from '../api'
 import { LogoMark, IconSend, IconChevron, IconFile } from '../icons'
 
@@ -50,7 +51,13 @@ function Message({ msg }) {
       <div className="msg-meta">
         <span className="msg-author">{msg.role === 'user' ? 'You' : 'Cypher'}</span>
       </div>
-      <div className="msg-body">{msg.content}</div>
+      <div className="msg-body">
+        {msg.role === 'assistant' && !msg.error ? (
+          <ReactMarkdown>{msg.content}</ReactMarkdown>
+        ) : (
+          msg.content
+        )}
+      </div>
       {msg.role === 'assistant' && <Sources sources={msg.sources} />}
     </div>
   )
