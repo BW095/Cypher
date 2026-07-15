@@ -25,3 +25,22 @@ class BGEWrapper:
         finally:
             del model
             gc.collect()
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query string for semantic search.
+
+        Uses the BGE-recommended query prefix so that query embeddings
+        align better with passage embeddings in vector space.
+        Same load/unload pattern as embed_batch — CPU only.
+        """
+        prefixed = f"Represent this sentence for searching relevant passages: {text}"
+
+        print(f"Loading BGE Embedding model (CPU) for single query...")
+        model = SentenceTransformer(self.model_name, device="cpu")
+
+        try:
+            embedding = model.encode([prefixed], normalize_embeddings=True)
+            return embedding[0].tolist()
+        finally:
+            del model
+            gc.collect()

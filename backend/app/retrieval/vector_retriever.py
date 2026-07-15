@@ -1,0 +1,68 @@
+"""
+Vector Retriever — semantic search over the Qdrant vector store.
+
+Takes a user query, embeds it with BGE, and finds the most similar
+document chunks stored during ingestion.
+"""
+
+import sys
+from app.ai.embeddings import BGEWrapper
+from app.storage.qdrant import QdrantStorage
+from app.config import RetrievalConfig
+
+
+class VectorRetriever:
+    def __init__(self, embedding_model: BGEWrapper = None, qdrant_db: QdrantStorage = None):
+        self.embedding_model = embedding_model or BGEWrapper()
+        self.qdrant_db = qdrant_db or QdrantStorage()
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        file_type: str | None = None,
+        source_path: str | None = None,
+    ) -> list[dict]:
+        """Retrieve the most relevant chunks for a query.
+
+        Returns a list of dicts:
+            {text: str, score: float, source: str, file_type: str, metadata: dict}
+        """
+        top_k = top_k or RetrievalConfig.VECTOR_TOP_K
+
+        print(f"[VectorRetriever] Embedding query: '{query[:80]}...'")
+        sys.stdout.flush()
+
+        # 1. Embed the query
+        query_vector = self.embedding_model.embed_query(query)
+
+        # 2. Search Qdrant
+        if file_type or source_path:
+            raw_hits = self.qdrant_db.search_with_filter(
+                query_vector=query_vector,
+                top_k=top_k,
+                file_type=file_type,
+                source_path=source_path,
+            )
+        else:
+            raw_hits = self.qdrant_db.search(
+                query_vector=query_vector,
+                top_k=top_k,
+            )
+
+        # 3. Normalize into a clean format
+        results = []
+        for hit in raw_hits:
+            metadata = hit.get("metadata", {})
+            results.append({
+                "text": hit.get("text", ""),
+                "score": hit.get("score", 0.0),
+                "source": metadata.get("source", "unknown"),
+                "file_type": metadata.get("file_type", "unknown"),
+                "metadata": metadata,
+            })
+
+        print(f"[VectorRetriever] Found {len(results)} chunks (top score: {results[0]['score']:.3f})" if results else "[VectorRetriever] No chunks found")
+        sys.stdout.flush()
+
+        return results
