@@ -1,4 +1,6 @@
 # backend/app/ingestion/pipeline.py
+import sys
+import traceback
 from app.ingestion.dispatcher import Dispatcher
 from app.ingestion.chunking import Chunker
 from app.ai.embeddings import BGEWrapper
@@ -18,6 +20,7 @@ class IngestionPipeline:
     def process_file(self, file_path: str):
         try:
             print(f"Starting pipeline for: {file_path}")
+            sys.stdout.flush()
 
             # 1. Mark as processing
             self.tracker.add_or_update_document(file_path, "unknown", "processing")
@@ -47,7 +50,9 @@ class IngestionPipeline:
             # 7. Mark as completed
             self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "completed")
             print(f"Successfully processed and stored: {file_path}")
+            sys.stdout.flush()
 
         except Exception as e:
             self.tracker.add_or_update_document(file_path, "unknown", "failed")
             print(f"Ingestion failed for {file_path}. Error: {str(e)}")
+            traceback.print_exc()

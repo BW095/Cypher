@@ -19,14 +19,19 @@ class PDFProcessor:
             result = self.converter.convert(file_path)
 
             # 2. Extract standard elements
-            # Docling handles the heavy lifting of converting layout to markdown
             text_content = result.document.export_to_markdown()
-
-            # Export raw dictionary for advanced table/image metadata extraction
             doc_data = result.document.export_to_dict()
 
             tables = self._extract_tables(doc_data)
             images = self._extract_images(doc_data)
+
+            # 3. Check if Docling extracted meaningful text.
+            #    Scanned PDFs may "succeed" but return empty/minimal text.
+            stripped = text_content.strip() if text_content else ""
+            if len(stripped) < 50:
+                print(f"  Docling extracted only {len(stripped)} chars — likely a scanned PDF.")
+                print("  Falling back to PaddleOCR...")
+                return self._fallback_process(file_path)
 
             return CanonicalDocument(
                 file_path=file_path,

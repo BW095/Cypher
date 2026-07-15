@@ -8,19 +8,20 @@ class BGEWrapper:
         self.model_name = model_name
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Loads BGE model, embeds the entire document's chunks, and unloads."""
+        """Loads BGE model on CPU, embeds the entire document's chunks, and unloads.
+
+        We explicitly use CPU to keep the GPU free for the LLM and vision model,
+        which need the full 6GB VRAM. BGE-base is small (~400MB) and fast on CPU.
+        """
         if not texts:
             return []
 
-        print(f"Loading BGE Embedding model for batch of {len(texts)} chunks...")
-        model = SentenceTransformer(self.model_name)
+        print(f"Loading BGE Embedding model (CPU) for batch of {len(texts)} chunks...")
+        model = SentenceTransformer(self.model_name, device="cpu")
 
         try:
             embeddings = model.encode(texts, normalize_embeddings=True)
             return embeddings.tolist()
         finally:
-            # Flush Memory
             del model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             gc.collect()

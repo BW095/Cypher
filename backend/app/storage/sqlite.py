@@ -2,10 +2,15 @@ import sqlite3
 import os
 from datetime import datetime
 
+# Resolve the backend directory (two levels up from this file: storage/ -> app/ -> backend/)
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DEFAULT_DB_PATH = os.path.join(_BACKEND_DIR, "data", "app.db")
+
+
 class SQLiteStorage:
-    def __init__(self, db_path: str = "./data/app.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or _DEFAULT_DB_PATH
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
 
     def _init_db(self):

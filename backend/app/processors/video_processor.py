@@ -3,7 +3,6 @@ import ffmpeg
 from app.ingestion.canonical_document import CanonicalDocument
 from app.ai.audio_model import WhisperWrapper
 from app.ai.vision_model import QwenVLWrapper
-
 class VideoProcessor:
     def __init__(self):
         self.whisper = WhisperWrapper()

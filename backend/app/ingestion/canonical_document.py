@@ -10,6 +10,3 @@ class CanonicalDocument(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     entities: List[Dict[str, Any]] = Field(default_factory=list)
     relationships: List[Dict[str, Any]] = Field(default_factory=list)
-
-import torch
-print(torch.cuda.is_available())
