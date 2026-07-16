@@ -23,6 +23,7 @@ class SourceReference(BaseModel):
     file_type: str = ""
     chunk_text: str = ""
     relevance_score: float = 0.0
+    cited: bool = False  # True when the answer text actually references this file
 
 
 class ChatResponse(BaseModel):

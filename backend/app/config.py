@@ -61,7 +61,7 @@ class ModelConfig:
 class RetrievalConfig:
     VECTOR_TOP_K: int = int(os.getenv("VECTOR_TOP_K", "5"))
     GRAPH_SEARCH_DEPTH: int = int(os.getenv("GRAPH_SEARCH_DEPTH", "2"))
-    MAX_CONTEXT_CHARS: int = int(os.getenv("MAX_CONTEXT_CHARS", "3000"))
+    MAX_CONTEXT_CHARS: int = int(os.getenv("MAX_CONTEXT_CHARS", "6000"))
     MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "5"))
 
 

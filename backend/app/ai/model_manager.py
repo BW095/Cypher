@@ -125,7 +125,11 @@ for line in sys.stdin:
                 messages=[
                     {"role": "system", "content": req.get(
                         "system_prompt",
-                        "You perfectly describe industrial equipment and environments.")},
+                        "You are an industrial inspection assistant. You describe "
+                        "equipment, instruments, and plant environments precisely, "
+                        "transcribing visible tags, nameplates, and gauge readings "
+                        "exactly, and noting visible defects or safety hazards. "
+                        "You never invent details that are not visible.")},
                     {"role": "user", "content": [
                         {"type": "image_url",
                          "image_url": {"url": "data:image/jpeg;base64," + encoded}},

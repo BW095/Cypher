@@ -7,6 +7,7 @@ and LLM generation into a single query() call.
 This is the primary interface used by the API routes.
 """
 
+import os
 import re
 import sys
 from app.retrieval.vector_retriever import VectorRetriever
@@ -20,21 +21,22 @@ from app.config import RetrievalConfig, LLMConfig
 
 
 # System prompt for the industrial AI assistant
-_SYSTEM_PROMPT = """You are Cypher, an intelligent AI assistant for industrial companies. 
-You have access to the company's internal documents, manuals, reports, and knowledge base.
+_SYSTEM_PROMPT = """You are Cypher, an expert AI knowledge copilot for an industrial company. You answer operational, maintenance, engineering, and compliance questions using the company's internal documents (manuals, work orders, inspection records, P&IDs, regulatory documents) provided as context.
 
-Your role:
-- Answer questions accurately based on the provided context from company documents.
-- Reference specific documents when providing information.
-- If the context doesn't contain enough information to answer fully, say so clearly.
-- Provide actionable recommendations when relevant.
-- Be precise with technical details — industrial information must be accurate.
+CITATION RULES (mandatory):
+- You MUST explicitly name the source files in your text.
+- Every factual claim MUST cite the source document it came from, inline, using the exact file name in square brackets, e.g.: The pump showed abnormal vibration [pump_maintenance_log.pdf].
+- Use the file names exactly as shown in the context labels — never invent, shorten, or rename them.
+- If several documents support a claim, cite each: [report_a.pdf][manual_b.docx].
+- End your response with a "**Sources:**" section that lists each unique file cited as a bullet point.
 
-Important rules:
-- Only use information from the provided context. Do NOT make up facts.
-- If you reference information, mention the source document.
-- Be concise but thorough.
-- For maintenance or safety questions, err on the side of caution."""
+ANSWER RULES:
+- Use ONLY the provided context. Never make up facts, values, tag numbers, or dates.
+- Be precise with technical details: equipment tags, parameter values, units, standard/regulation numbers must be copied exactly.
+- If the context is insufficient or conflicting, say exactly what is missing or conflicting — do not guess. Provide a confidence assessment when appropriate.
+- When relevant, add a short "**Recommendation:**" with concrete next actions (inspection, maintenance, compliance step).
+- For safety- or compliance-critical topics (regulations, failure risks, hazardous procedures), explicitly identify **Compliance Gaps** if current procedures or states violate stated norms.
+- Structure longer answers with short markdown headings or bullet points; keep simple answers to a short paragraph."""
 
 
 class QueryEngine:
@@ -110,7 +112,8 @@ class QueryEngine:
             answer = "I'm sorry, I wasn't able to generate a response. Please try rephrasing your question."
 
         # 7. Extract source references and entity names
-        sources = self.context_builder.extract_source_references(vector_chunks)
+        sources = self.context_builder.extract_source_references(vector_chunks, graph_context)
+        self._mark_cited_sources(answer, sources)
         entities_referenced = [e.get("name", "") for e in graph_context.get("entities", [])]
 
         print(f"\n[QueryEngine] Done. Answer length: {len(answer)} chars, {len(sources)} sources cited.")
@@ -147,6 +150,7 @@ class QueryEngine:
 
         # Add the current question with context
         user_content = f"""Based on the following context from the company's knowledge base, answer the user's question.
+Remember: cite the exact file name in square brackets after every claim, and finish with a **Sources:** line.
 
 {context}
 
@@ -156,6 +160,22 @@ class QueryEngine:
         messages.append({"role": "user", "content": user_content})
 
         return messages
+
+    @staticmethod
+    def _mark_cited_sources(answer: str, sources: list[dict]):
+        """Flag each source with whether the answer actually references it.
+
+        The UI uses this to visually separate documents the model cited
+        from documents that were merely retrieved.
+        """
+        answer_lower = answer.lower()
+        for s in sources:
+            base = os.path.basename(s.get("file_path", ""))
+            stem = os.path.splitext(base)[0]
+            s["cited"] = bool(base) and (
+                base.lower() in answer_lower or
+                (len(stem) > 3 and stem.lower() in answer_lower)
+            )
 
     def _clean_answer(self, raw: str) -> str:
         """Strip Qwen3's <think>...</think> tags and clean up the response."""

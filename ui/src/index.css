@@ -1017,22 +1017,96 @@ textarea {
 .graph-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .graph-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--bg);
+  background: var(--bg-raised);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 10px 14px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.graph-item:hover {
+  border-color: var(--accent-line);
+  transform: translateY(-1px);
 }
 
 .graph-item.edge {
-  background: var(--bg-hover);
-  border-style: dashed;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.graph-item.edge:hover {
+  transform: none;
+  border-color: transparent;
+}
+
+.edge-node {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.edge-connection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 80px;
+  position: relative;
+  margin: 0 4px;
+}
+
+.edge-line {
+  height: 2px;
+  width: 100%;
+  background: var(--accent-line);
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 0;
+}
+
+.edge-line::after {
+  content: '';
+  position: absolute;
+  right: -2px;
+  top: -4px;
+  border-left: 6px solid var(--accent-line);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.edge-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--accent-dim);
+  z-index: 1;
 }
 
 .entity-name {

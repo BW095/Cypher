@@ -32,7 +32,14 @@ class ImageProcessor:
         # 3. OCR found little/nothing — it's a photo (equipment, site, etc.)
         #    → use Vision model for visual understanding
         print(f"  OCR extracted only {len(ocr_text.strip())} chars — invoking Vision model...")
-        prompt = "Describe this industrial image in detail. Focus on equipment, conditions, and potential faults."
+        prompt = (
+            "Describe this industrial image for a plant knowledge base. "
+            "Identify: (1) equipment and components, reading any visible tag numbers, "
+            "nameplates, labels, or gauge values exactly as written; (2) the setting "
+            "(unit/area, indoor/outdoor); (3) visible condition — corrosion, leaks, "
+            "damage, wear, missing guards, or safety hazards; (4) any ongoing activity "
+            "or procedure. State only what is visible — do not guess hidden details."
+        )
         vision_desc = self.vision.analyze_image(file_path, prompt)
 
         # Combine whatever OCR found (if any) with the vision description

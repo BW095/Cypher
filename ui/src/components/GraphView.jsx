@@ -151,9 +151,12 @@ export default function GraphView() {
                           const tgt = result.nodes.find(n => n.id === e.target)?.name || e.target
                           return (
                             <div className="graph-item edge" key={idx}>
-                              <span className="entity-name">{src}</span>
-                              <span className="badge dim">{e.type}</span>
-                              <span className="entity-name">{tgt}</span>
+                              <div className="edge-node">{src}</div>
+                              <div className="edge-connection">
+                                <div className="edge-line"></div>
+                                <span className="edge-label">{e.type}</span>
+                              </div>
+                              <div className="edge-node">{tgt}</div>
                             </div>
                           )
                         })}

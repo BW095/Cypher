@@ -14,11 +14,14 @@ function Sources({ sources }) {
   const [open, setOpen] = useState(false)
   if (!sources || sources.length === 0) return null
 
+  const citedCount = sources.filter(s => s.cited).length
+  const label = citedCount > 0 ? `${citedCount} cited source${citedCount > 1 ? 's' : ''} (${sources.length} retrieved)` : `${sources.length} source${sources.length > 1 ? 's' : ''} retrieved`
+
   return (
     <div className="sources">
       <button className="sources-toggle" onClick={() => setOpen(!open)}>
         <IconFile size={14} />
-        {sources.length} source{sources.length > 1 ? 's' : ''}
+        {label}
         <span className={`chev ${open ? 'open' : ''}`}>
           <IconChevron size={14} />
         </span>
@@ -26,10 +29,13 @@ function Sources({ sources }) {
       {open && (
         <div className="sources-list">
           {sources.map((s, idx) => (
-            <div className="source-item" key={idx}>
+            <div className={`source-item ${s.cited ? 'cited' : ''}`} key={idx}>
               <span className="source-num">[{idx + 1}]</span>
               <div className="source-info">
-                <div className="source-name">{baseName(s.file_path)}</div>
+                <div className="source-name">
+                  {baseName(s.file_path)}
+                  {s.cited && <span className="badge ok" style={{marginLeft: '8px'}}>Cited</span>}
+                </div>
                 <div className="source-path">{s.file_path}</div>
                 {s.chunk_text && <div className="source-preview">{s.chunk_text}</div>}
               </div>

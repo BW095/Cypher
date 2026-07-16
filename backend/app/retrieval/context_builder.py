@@ -58,7 +58,13 @@ class ContextBuilder:
 
     def _format_vector_chunks(self, chunks: list[dict]) -> str:
         """Format vector search results as a numbered context block."""
-        lines = ["=== RELEVANT DOCUMENT EXCERPTS ==="]
+        lines = [
+            "=== RELEVANT DOCUMENT EXCERPTS ===",
+            "(cite these using the exact file name shown in each label)",
+        ]
+
+        # Highest-relevance excerpts first so truncation drops the weakest
+        chunks = sorted(chunks, key=lambda c: c.get("score", 0.0), reverse=True)
 
         # Deduplicate by source + rough text overlap
         seen_sources = {}
@@ -85,11 +91,10 @@ class ContextBuilder:
             score = chunk.get("score", 0.0)
             text = chunk.get("text", "").strip()
 
-            source_label = os.path.basename(source)
-            if file_type:
-                source_label += f" ({file_type})"
+            file_name = os.path.basename(source)
+            meta = f" | type: {file_type}" if file_type else ""
 
-            lines.append(f"\n[Source {i}: {source_label} | relevance: {score:.2f}]")
+            lines.append(f'\n[Source {i} | file: "{file_name}"{meta} | relevance: {score:.2f}]')
             lines.append(text)
 
         return "\n".join(lines)
@@ -126,17 +131,23 @@ class ContextBuilder:
 
         # Mention source documents
         if source_docs:
-            doc_names = [os.path.basename(d) for d in source_docs]
-            lines.append(f"\nMentioned in: {', '.join(doc_names)}")
+            doc_names = [f'"{os.path.basename(d)}"' for d in source_docs]
+            lines.append(f"\nThese facts come from: {', '.join(doc_names)} "
+                         f"(cite these file names when using the facts above)")
 
         return "\n".join(lines)
 
-    def extract_source_references(self, vector_chunks: list[dict]) -> list[dict]:
-        """Extract deduplicated source references for API response."""
+    def extract_source_references(self, vector_chunks: list[dict],
+                                  graph_context: dict | None = None) -> list[dict]:
+        """Extract deduplicated source references for the API response.
+
+        Combines documents found by vector search (with relevance scores)
+        and documents linked through the knowledge graph.
+        """
         sources = []
         seen = set()
 
-        for chunk in vector_chunks:
+        for chunk in sorted(vector_chunks, key=lambda c: c.get("score", 0.0), reverse=True):
             source = chunk.get("source", "unknown")
             if source not in seen:
                 seen.add(source)
@@ -146,5 +157,17 @@ class ContextBuilder:
                     "chunk_text": chunk.get("text", "")[:200],  # Preview
                     "relevance_score": chunk.get("score", 0.0),
                 })
+
+        # Documents surfaced by graph traversal (entity mentions)
+        if graph_context:
+            for doc in graph_context.get("source_documents", []):
+                if doc and doc not in seen:
+                    seen.add(doc)
+                    sources.append({
+                        "file_path": doc,
+                        "file_type": "",
+                        "chunk_text": "Linked via knowledge graph",
+                        "relevance_score": 0.0,
+                    })
 
         return sources
