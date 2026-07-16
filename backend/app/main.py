@@ -134,6 +134,13 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("🛑 Shutting down Cypher AI Brain...")
 
+    try:
+        from app.ai.model_manager import shutdown_model_manager
+        shutdown_model_manager()
+        logger.info("  ✅ LLM worker stopped, VRAM freed")
+    except Exception:
+        pass
+
     if _neo4j:
         try:
             _neo4j.close()
@@ -192,10 +199,23 @@ async def health_check():
     services["sqlite"] = "ok" if _sqlite else "unavailable"
     services["qdrant"] = "ok" if _qdrant else "unavailable"
     services["neo4j"] = "ok" if _neo4j else "unavailable"
-    services["llm"] = "configured" if _llm else "unavailable"
     services["embeddings"] = "configured" if _embedding_model else "unavailable"
 
-    overall = "ok" if all(v in ("ok", "configured") for v in services.values()) else "degraded"
+    if _llm:
+        try:
+            s = _llm.manager.status()
+            if s["loaded"]:
+                services["llm"] = f"loaded (n_gpu_layers={s['n_gpu_layers']})"
+            else:
+                services["llm"] = "configured (loads on first use)"
+        except Exception:
+            services["llm"] = "configured"
+    else:
+        services["llm"] = "unavailable"
+
+    overall = "ok" if all(
+        v.startswith(("ok", "configured", "loaded")) for v in services.values()
+    ) else "degraded"
 
     return HealthResponse(status=overall, services=services)
 

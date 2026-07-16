@@ -25,7 +25,13 @@ class Neo4jStorage:
         """
         Takes the entities and relationships from the processed document and stores them in Neo4j.
         """
+        # Always record the document itself, even when extraction found nothing —
+        # an empty graph should still show which files were ingested.
+        self._merge_document(document)
+
         if not document.entities and not document.relationships:
+            print(f"[Neo4j] No entities/relationships for {document.file_path} "
+                  f"(entity extraction returned nothing) — stored Document node only.")
             return
 
         print(f"Storing {len(document.entities)} entities and {len(document.relationships)} relationships in Neo4j...")
@@ -79,19 +85,24 @@ class Neo4jStorage:
         except Exception as e:
             logging.error(f"Error merging relationship: {e}")
 
-    def _link_document_to_entities(self, document: CanonicalDocument):
-        # Create a node for the document itself and link it to the extracted entities
+    def _merge_document(self, document: CanonicalDocument):
+        # Create/update the node for the document itself
         doc_query = """
         MERGE (d:Document {path: $file_path})
         SET d.type = $file_type
         """
-        self.driver.execute_query(
-            doc_query,
-            file_path=document.file_path,
-            file_type=document.file_type,
-            database_=self.database
-        )
+        try:
+            self.driver.execute_query(
+                doc_query,
+                file_path=document.file_path,
+                file_type=document.file_type,
+                database_=self.database
+            )
+        except Exception as e:
+            logging.error(f"Error merging document node {document.file_path}: {e}")
 
+    def _link_document_to_entities(self, document: CanonicalDocument):
+        # Link the document node to the extracted entities
         link_query = """
         MATCH (d:Document {path: $file_path})
         MATCH (e:Entity {id: $entity_id})

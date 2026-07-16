@@ -74,6 +74,18 @@ class LLMConfig:
     N_CTX: int = int(os.getenv("LLM_N_CTX", "4096"))
     SUBPROCESS_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "300"))
 
+    # GPU offload: "auto" plans layers from free VRAM (hardware.py);
+    # an integer forces that many layers (0 = CPU-only, like -1 used to force all).
+    N_GPU_LAYERS: str = os.getenv("LLM_N_GPU_LAYERS", "auto")
+    # VRAM headroom (MB) kept free for llama.cpp compute buffers when planning.
+    VRAM_RESERVE_MB: int = int(os.getenv("LLM_VRAM_RESERVE_MB", "800"))
+    # Unload the model after this many seconds of inactivity (0 = never unload).
+    IDLE_UNLOAD_SECONDS: int = int(os.getenv("LLM_IDLE_UNLOAD_SECONDS", "600"))
+    # Max seconds to wait for the model to load (CPU loads of 8B can be slow).
+    LOAD_TIMEOUT: int = int(os.getenv("LLM_LOAD_TIMEOUT", "600"))
+    # CPU threads for inference (0 = llama.cpp default).
+    N_THREADS: int = int(os.getenv("LLM_N_THREADS", "0"))
+
 
 # ---------------------------------------------------------------------------
 # Server settings
