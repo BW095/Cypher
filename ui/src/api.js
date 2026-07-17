@@ -44,11 +44,38 @@ export const api = {
 
   // Documents
   documents: () => fetch('/api/documents').then(handle),
+  // URL to open/download an original source file (used as an <a href>)
+  documentUrl: (filePath, download = false) =>
+    `/api/documents/open?path=${encodeURIComponent(filePath)}${download ? '&download=true' : ''}`,
 
   // Graph
   graphQuery: (entityName, depth = 2) =>
     post('/api/graph/query', { entity_name: entityName, depth }),
   graphStats: () => fetch('/api/graph/stats').then(handle),
+  graphFull: (limit = 400) => fetch(`/api/graph/full?limit=${limit}`).then(handle),
+
+  // Compliance
+  complianceGaps: (analyze = false) =>
+    fetch(`/api/compliance/gaps?analyze=${analyze}`).then(handle),
+}
+
+// Stable color per entity type — used across the graph visualization.
+export const ENTITY_COLORS = {
+  EQUIPMENT: '#e8a33d',
+  COMPONENT: '#60a5fa',
+  PROCESS_PARAMETER: '#4ade80',
+  FAILURE: '#f87171',
+  PROCEDURE: '#a78bfa',
+  REGULATION: '#f472b6',
+  PERSONNEL: '#22d3ee',
+  MATERIAL: '#fbbf24',
+  LOCATION: '#34d399',
+  DATE: '#94a3b8',
+  Unknown: '#5c6675',
+}
+
+export function entityColor(type) {
+  return ENTITY_COLORS[type] || ENTITY_COLORS.Unknown
 }
 
 // "2026-07-11 20:15:03.123456" (SQLite) → friendly relative time

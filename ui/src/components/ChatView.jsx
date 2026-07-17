@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { api, baseName } from '../api'
-import { LogoMark, IconSend, IconChevron, IconFile } from '../icons'
+import { LogoMark, IconSend, IconChevron, IconFile, IconExternal, IconQuote } from '../icons'
 
 const SUGGESTIONS = [
   'Summarize the latest maintenance reports',
@@ -10,12 +10,62 @@ const SUGGESTIONS = [
   'List all inspection procedures',
 ]
 
+const CONF_CLASS = { High: 'ok', Medium: 'warn', Low: 'err' }
+
+function ConfidenceBadge({ confidence }) {
+  if (!confidence || !confidence.label) return null
+  const cls = CONF_CLASS[confidence.label] || 'dim'
+  const pct = Math.round((confidence.score || 0) * 100)
+  const title = (confidence.reasons || []).join(' · ')
+  return (
+    <span className={`conf-badge ${cls}`} title={title}>
+      <span className="conf-dot" />
+      {confidence.label} confidence · {pct}%
+    </span>
+  )
+}
+
+function SourceRow({ s, num }) {
+  const name = baseName(s.file_path)
+  return (
+    <a
+      className={`source-item ${s.cited ? 'cited' : ''}`}
+      href={api.documentUrl(s.file_path)}
+      target="_blank"
+      rel="noreferrer"
+      title={`Open ${name}`}
+    >
+      <span className="source-num">{s.cited ? <IconQuote size={13} /> : `[${num}]`}</span>
+      <div className="source-info">
+        <div className="source-name">
+          {name}
+          {s.cited && <span className="cited-tag">cited</span>}
+        </div>
+        <div className="source-path">{s.file_path}</div>
+        {s.chunk_text && <div className="source-preview">{s.chunk_text}</div>}
+      </div>
+      <div className="source-right">
+        {typeof s.relevance_score === 'number' && s.relevance_score > 0 && (
+          <span className="source-score">{s.relevance_score.toFixed(2)}</span>
+        )}
+        <IconExternal size={14} />
+      </div>
+    </a>
+  )
+}
+
 function Sources({ sources }) {
   const [open, setOpen] = useState(false)
   if (!sources || sources.length === 0) return null
 
-  const citedCount = sources.filter(s => s.cited).length
-  const label = citedCount > 0 ? `${citedCount} cited source${citedCount > 1 ? 's' : ''} (${sources.length} retrieved)` : `${sources.length} source${sources.length > 1 ? 's' : ''} retrieved`
+  // Sources the model actually cited come first and drive the summary label.
+  const cited = sources.filter((s) => s.cited)
+  const others = sources.filter((s) => !s.cited)
+  const ordered = [...cited, ...others]
+  const label =
+    cited.length > 0
+      ? `${cited.length} cited · ${sources.length} retrieved`
+      : `${sources.length} source${sources.length > 1 ? 's' : ''} retrieved`
 
   return (
     <div className="sources">
@@ -28,21 +78,8 @@ function Sources({ sources }) {
       </button>
       {open && (
         <div className="sources-list">
-          {sources.map((s, idx) => (
-            <div className={`source-item ${s.cited ? 'cited' : ''}`} key={idx}>
-              <span className="source-num">[{idx + 1}]</span>
-              <div className="source-info">
-                <div className="source-name">
-                  {baseName(s.file_path)}
-                  {s.cited && <span className="badge ok" style={{marginLeft: '8px'}}>Cited</span>}
-                </div>
-                <div className="source-path">{s.file_path}</div>
-                {s.chunk_text && <div className="source-preview">{s.chunk_text}</div>}
-              </div>
-              {typeof s.relevance_score === 'number' && (
-                <span className="source-score">{s.relevance_score.toFixed(3)}</span>
-              )}
-            </div>
+          {ordered.map((s, idx) => (
+            <SourceRow key={idx} s={s} num={idx + 1} />
           ))}
         </div>
       )}
@@ -56,6 +93,9 @@ function Message({ msg }) {
     <div className={`msg ${roleClass}`}>
       <div className="msg-meta">
         <span className="msg-author">{msg.role === 'user' ? 'You' : 'Cypher'}</span>
+        {msg.role === 'assistant' && !msg.error && (
+          <ConfidenceBadge confidence={msg.confidence} />
+        )}
       </div>
       <div className="msg-body">
         {msg.role === 'assistant' && !msg.error ? (
@@ -88,7 +128,11 @@ export default function ChatView({ sessionId, onSessionCreated }) {
       .then((data) => {
         if (!cancelled) {
           setMessages(
-            data.messages.map((m) => ({ role: m.role, content: m.content }))
+            data.messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+              sources: m.sources,
+            }))
           )
         }
       })
@@ -126,7 +170,12 @@ export default function ChatView({ sessionId, onSessionCreated }) {
       const res = await api.ask(question, sessionId)
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: res.answer, sources: res.sources },
+        {
+          role: 'assistant',
+          content: res.answer,
+          sources: res.sources,
+          confidence: res.confidence,
+        },
       ])
       if (!sessionId && res.session_id) onSessionCreated(res.session_id)
     } catch (err) {

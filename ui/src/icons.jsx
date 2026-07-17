@@ -97,3 +97,31 @@ export const IconGraph = (p) => (
     <path d="M6.8 7.5 10.5 16M17.2 7.5 13.5 16M7.2 6h9.6" />
   </Icon>
 )
+
+export const IconExternal = (p) => (
+  <Icon {...p}>
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    <path d="M15 3h6v6M10 14 21 3" />
+  </Icon>
+)
+
+export const IconQuote = (p) => (
+  <Icon {...p}>
+    <path d="M7 7h4v6a4 4 0 0 1-4 4M13 7h4v6a4 4 0 0 1-4 4" />
+  </Icon>
+)
+
+export const IconShield = (p) => (
+  <Icon {...p}>
+    <path d="M12 3 5 6v5c0 4.5 3 8 7 9 4-1 7-4.5 7-9V6Z" />
+    <path d="m9 12 2 2 4-4" />
+  </Icon>
+)
+
+export const IconMenu = (p) => (
+  <Icon {...p}>
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </Icon>
+)

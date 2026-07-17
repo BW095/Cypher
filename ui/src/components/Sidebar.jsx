@@ -6,6 +6,7 @@ import {
   IconPlus,
   IconX,
   IconGraph,
+  IconShield,
 } from '../icons'
 
 function StatusChip({ label, ok }) {
@@ -18,6 +19,8 @@ function StatusChip({ label, ok }) {
 }
 
 export default function Sidebar({
+  isOpen,
+  onClose,
   view,
   onChangeView,
   sessions,
@@ -30,8 +33,10 @@ export default function Sidebar({
   const services = health?.services
 
   return (
-    <aside className="sidebar">
-      <div className="brand">
+    <>
+      {isOpen && <div className="sidebar-backdrop" onClick={onClose} />}
+      <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+        <div className="brand">
         <LogoMark />
         <div>
           <div className="brand-name">CYPHER</div>
@@ -60,6 +65,13 @@ export default function Sidebar({
         >
           <IconGraph />
           Graph Explorer
+        </button>
+        <button
+          className={`nav-item ${view === 'compliance' ? 'active' : ''}`}
+          onClick={() => onChangeView('compliance')}
+        >
+          <IconShield />
+          Compliance
         </button>
       </nav>
 
@@ -112,6 +124,7 @@ export default function Sidebar({
           </div>
         )}
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }
