@@ -7,43 +7,53 @@ from app.ingestion.canonical_document import CanonicalDocument
 
 
 from app.ai.llm import LLMWrapper
-from app.config import ExtractionConfig
+from app.config import ExtractionConfig, ModelConfig
 class EntityExtractor:
     def __init__(self):
-        self.llm = LLMWrapper()
+        # Use the dedicated extraction model if one is configured; otherwise
+        # fall back to the main chat model (unchanged behavior).
+        extraction_path = ModelConfig.EXTRACTION_MODEL_PATH or None
+        if extraction_path:
+            print(f"[EntityExtractor] Using dedicated extraction model: {extraction_path}")
+        self.llm = LLMWrapper(model_path=extraction_path)
 
         self.system_prompt = """You are an AI expert in industrial knowledge extraction for plants, factories, and engineering organisations.
-Extract entities and relationships from the provided text to build a unified knowledge graph. The sources include maintenance reports, P&IDs, work orders, inspection records, manuals, compliance documents, and emails.
+From the provided text, extract the KEY entities and the explicit relationships between them to build a unified knowledge graph. Sources include maintenance reports, P&IDs, work orders, inspection records, manuals, compliance documents, and emails.
+
+EXTRACTION DISCIPLINE (read this first — it governs everything below):
+- Be SELECTIVE, not exhaustive. Extract only entities that carry real operational meaning — what an engineer would actually track. A short passage usually yields a HANDFUL of entities, not dozens.
+- Do NOT create a separate entity for any of these: routine clock times or timestamps ("08:15", "13:10"); record/document identifiers such as work-order numbers ("WO-1004"), report/ticket/log numbers; generic words ("system", "data", "report", "issue", "reading"); or vague noun phrases.
+- A record ID (e.g. WO-1004) is a reference to a record, not a physical thing. If a work order matters, capture it ONCE as a PROCEDURE by its subject (e.g. "Mechanical Seal Replacement"), never as a LOCATION and never as something another entity sits "in".
+- Merge duplicates: the same real-world thing mentioned several times is ONE entity — reuse the same id.
 
 Entity types (use EXACTLY these):
-- EQUIPMENT: machines and assets. Keep tag numbers verbatim in the name (e.g. "Pump P-101", "Boiler B-2").
+- EQUIPMENT: machines and assets. Keep tag numbers verbatim ("Pump P-101", "Boiler B-2").
 - COMPONENT: parts of equipment (valves, bearings, seals, impellers).
-- PROCESS_PARAMETER: measured/controlled variables with values when given (e.g. "Discharge Pressure 12 bar", "Bearing Temperature 85°C").
+- PROCESS_PARAMETER: measured/controlled variables WITH their value when given ("Discharge Pressure 12 bar", "Bearing Temperature 85°C").
 - FAILURE: failure modes, defects, incidents, near-misses, root causes (leaks, overheating, vibration, trips).
-- PROCEDURE: maintenance tasks, inspections, tests, SOPs, work orders.
-- REGULATION: standards and regulatory references (Factory Act, OISD, PESO, IS/ISO codes, environmental norms, quality standards).
-- PERSONNEL: people or roles (e.g. "Shift Engineer", "A. Kumar").
+- PROCEDURE: maintenance tasks, inspections, tests, SOPs, and work orders (captured by subject, not by number).
+- REGULATION: standards and regulatory references (Factory Act, OISD, PESO, IS/ISO codes, environmental/quality norms).
+- PERSONNEL: named people or specific roles ("Shift Engineer", "A. Kumar").
 - MATERIAL: consumables, lubricants, chemicals, spares.
-- LOCATION: plants, units, areas, sections.
-- DATE: dates of events, inspections, or deadlines (normalize to YYYY-MM-DD when possible).
+- LOCATION: real physical places only — plants, units, areas, sections. NOT records, NOT equipment.
+- DATE: only operationally significant dates — a deadline, a scheduled inspection date, an incident date (normalize to YYYY-MM-DD when possible). NOT routine clock times or every timestamp in a log.
 
-Relationship types (use EXACTLY these):
+Relationship types (use EXACTLY these). Create a relationship ONLY when the text explicitly states or clearly implies it — never invent one just to connect things or make the graph denser:
 - PART_OF: Component -> Equipment; Equipment -> Location.
 - HAS_FAILURE: Equipment/Component -> Failure.
 - REQUIRES: Equipment/Failure -> Procedure or Material.
 - MEASURES: Process_Parameter -> Equipment/Component.
 - GOVERNED_BY: Equipment/Procedure -> Regulation.
 - RESPONSIBLE_FOR: Personnel -> Equipment/Procedure.
-- LOCATED_IN: Equipment/Personnel -> Location.
+- LOCATED_IN: Equipment/Personnel -> Location  (the target MUST be a LOCATION entity).
 - OCCURRED_ON: Failure/Procedure -> Date.
-- RELATES_TO: generic association (use only when nothing above fits).
+- RELATES_TO: generic association — use sparingly, only when nothing above fits.
 
 Rules:
-- id: lowercase snake_case, stable and derived from the name (e.g. "pump_p101", "bearing_temp_85c"). Reuse the SAME id when the same real-world thing appears twice.
+- id: lowercase snake_case, stable and derived from the name ("pump_p101", "bearing_temp_85c"). Reuse the SAME id when the same real-world thing appears twice.
 - name: short canonical name; preserve equipment tags, standard numbers, and units exactly as written.
-- description: one factual sentence grounded in the text — never invent facts. Ensure high accuracy.
-- Every relationship's source_id and target_id MUST be ids from your entities list.
-- Prefer fewer, high-confidence entities over many vague ones. Skip generic words ("system", "data", "report").
+- description: a SHORT factual phrase grounded in the text — at most 12 words, no full sentences, never invent facts. Omit filler; capture only the defining detail (e.g. "feed water pump, 12 bar discharge").
+- Every relationship's source_id and target_id MUST be ids present in your entities list, and MUST respect the stated direction and endpoint types (e.g. LOCATED_IN's target is a LOCATION).
 
 Output ONLY a valid JSON object, no explanations, no markdown fences:
 {

@@ -1,5 +1,6 @@
 from neo4j import GraphDatabase
 import logging
+import re
 from app.ingestion.canonical_document import CanonicalDocument
 
 
@@ -14,8 +15,23 @@ class Neo4jStorage:
         try:
             self.driver.verify_connectivity()
             print("Successfully connected to Neo4j.")
+            # One-time, idempotent: upgrade any legacy `:RELATED_TO {type}` edges
+            # to native relationship types so real Cypher reasoning works
+            # (e.g. MATCH ()-[:HAS_FAILURE]->()).
+            self.migrate_legacy_relationships()
         except Exception as e:
             logging.error(f"Failed to connect to Neo4j: {e}")
+
+    # Relationship types are identifiers in Cypher and can't be parameterized,
+    # so any type coming from the LLM must be sanitized before it's formatted
+    # into a query. Keep it to a safe SCREAMING_SNAKE identifier.
+    @staticmethod
+    def _safe_rel_type(rtype: str) -> str:
+        t = (rtype or "RELATES_TO").strip().upper().replace(" ", "_").replace("-", "_")
+        t = re.sub(r"[^A-Z0-9_]", "", t)
+        if not t or not t[0].isalpha():
+            return "RELATES_TO"
+        return t
 
     def close(self):
         # Always close the driver connection when the application shuts down
@@ -68,22 +84,68 @@ class Neo4jStorage:
             logging.error(f"Error merging entity {entity.get('name')}: {e}")
 
     def _merge_relationship(self, rel: dict):
-        # Uses MERGE to ensure we don't create duplicate relationships between the same nodes
-        query = """
-        MATCH (source:Entity {id: $source_id})
-        MATCH (target:Entity {id: $target_id})
-        MERGE (source)-[r:RELATED_TO {type: $rel_type}]->(target)
+        # Store the semantic type as a NATIVE Neo4j relationship type
+        # (e.g. -[:HAS_FAILURE]->) rather than a generic -[:RELATED_TO {type}]->,
+        # so the graph is queryable/colorable by real relationship types.
+        # The type is sanitized (it can't be a bound parameter in Cypher).
+        rel_type = self._safe_rel_type(rel.get("type"))
+        query = f"""
+        MATCH (source:Entity {{id: $source_id}})
+        MATCH (target:Entity {{id: $target_id}})
+        MERGE (source)-[:{rel_type}]->(target)
         """
         try:
             self.driver.execute_query(
                 query,
                 source_id=rel.get("source_id"),
                 target_id=rel.get("target_id"),
-                rel_type=rel.get("type", "RELATES_TO"),
                 database_=self.database
             )
         except Exception as e:
             logging.error(f"Error merging relationship: {e}")
+
+    def migrate_legacy_relationships(self):
+        """Convert legacy `(a)-[:RELATED_TO {type: X}]->(b)` edges to native
+        `(a)-[:X]->(b)` edges. Idempotent and APOC-free: after the first run
+        there are no RELATED_TO edges left, so it's a cheap no-op afterwards.
+        """
+        try:
+            records, _, _ = self.driver.execute_query(
+                """
+                MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
+                RETURN a.id AS source, b.id AS target,
+                       r.type AS type, elementId(r) AS eid
+                """,
+                database_=self.database,
+            )
+        except Exception as e:
+            logging.error(f"Could not scan for legacy relationships: {e}")
+            return
+
+        if not records:
+            return
+
+        migrated = 0
+        for rec in records:
+            rel_type = self._safe_rel_type(rec.get("type"))
+            try:
+                self.driver.execute_query(
+                    f"""
+                    MATCH (a:Entity {{id: $s}}), (b:Entity {{id: $t}})
+                    MERGE (a)-[:{rel_type}]->(b)
+                    """,
+                    s=rec["source"], t=rec["target"], database_=self.database,
+                )
+                self.driver.execute_query(
+                    "MATCH ()-[r:RELATED_TO]->() WHERE elementId(r) = $eid DELETE r",
+                    eid=rec["eid"], database_=self.database,
+                )
+                migrated += 1
+            except Exception as e:
+                logging.error(f"Error migrating relationship {rec.get('eid')}: {e}")
+
+        if migrated:
+            print(f"[Neo4j] Migrated {migrated} legacy RELATED_TO edge(s) to native types.")
 
     def delete_document(self, file_path: str):
         """Remove a document's node and detach its links, for clean re-ingestion.
@@ -260,17 +322,24 @@ class Neo4jStorage:
 
         Returns {nodes: [...], edges: [...], source_documents: [...]}.
         """
+        # labelFilter "+Entity" keeps traversal on Entity nodes only, so we
+        # never hop through a Document via :MENTIONS — otherwise two entities
+        # that merely appear in the same file would look directly related.
         query = """
         MATCH (start:Entity)
         WHERE toLower(start.name) = toLower($name)
-        CALL apoc.path.subgraphAll(start, {maxLevel: $depth}) YIELD nodes, relationships
+        CALL apoc.path.subgraphAll(start, {maxLevel: $depth, labelFilter: "+Entity"})
+             YIELD nodes, relationships
         RETURN nodes, relationships
         """
-        # Fallback query if APOC is not installed
+        # Fallback query if APOC is not installed. The ALL(...) guard enforces
+        # the same rule: every node on the path must be an Entity (blocks
+        # Entity-[:MENTIONS]-Document-[:MENTIONS]-Entity co-mention bridges).
         fallback_query = """
         MATCH (start:Entity)
         WHERE toLower(start.name) = toLower($name)
         OPTIONAL MATCH path = (start)-[*1..%d]-(connected:Entity)
+        WHERE ALL(n IN nodes(path) WHERE n:Entity)
         WITH start, collect(DISTINCT connected) AS neighbors,
              collect(DISTINCT relationships(path)) AS all_rels
         RETURN start, neighbors, all_rels
@@ -397,7 +466,7 @@ class Neo4jStorage:
             node_records, _, _ = self.driver.execute_query(
                 """
                 MATCH (e:Entity)
-                OPTIONAL MATCH (e)-[r:RELATED_TO]-()
+                OPTIONAL MATCH (e)-[r]-(:Entity)
                 WITH e, count(r) AS degree
                 RETURN e.id AS id, e.name AS name, e.type AS type,
                        e.description AS description, degree
@@ -419,15 +488,16 @@ class Neo4jStorage:
 
             edge_records, _, _ = self.driver.execute_query(
                 """
-                MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
+                MATCH (a:Entity)-[r]->(b:Entity)
                 WHERE a.id IN $ids AND b.id IN $ids
-                RETURN a.id AS source, b.id AS target, r.type AS type
+                RETURN a.id AS source, b.id AS target,
+                       coalesce(r.type, type(r)) AS type
                 """,
                 ids=list(node_ids), database_=self.database,
             )
             edges = [{
                 "source": r["source"], "target": r["target"],
-                "type": r["type"] or "RELATED_TO",
+                "type": r["type"] or "RELATES_TO",
             } for r in edge_records
                 if r["source"] in node_ids and r["target"] in node_ids]
 
@@ -443,8 +513,11 @@ class Neo4jStorage:
                 "MATCH (e:Entity) RETURN e.type AS type, count(*) AS count",
                 database_=self.database,
             )
+            # Only count semantic entity↔entity edges (exclude Document MENTIONS),
+            # grouped by their native relationship type.
             rel_records, _, _ = self.driver.execute_query(
-                "MATCH ()-[r]->() RETURN type(r) AS type, count(*) AS count",
+                "MATCH (:Entity)-[r]->(:Entity) "
+                "RETURN coalesce(r.type, type(r)) AS type, count(*) AS count",
                 database_=self.database,
             )
             doc_records, _, _ = self.driver.execute_query(

@@ -130,6 +130,60 @@ class QueryEngine:
             "confidence": confidence,
         }
 
+    def query_stream(self, user_message: str, chat_history: list[dict] | None = None):
+        """Streaming version of query().
+
+        Runs retrieval + context building the same way, then streams the LLM
+        answer token-by-token. Yields event dicts:
+            {"type": "token", "text": "..."}          (repeated)
+            {"type": "done", "answer", "sources",       (once, at the end)
+             "entities_referenced", "confidence"}
+
+        The final `answer` is the cleaned full text (thinking tags stripped),
+        so the client should replace the streamed text with it on "done".
+        """
+        print(f"\n[QueryEngine] Streaming query: '{user_message[:100]}...'")
+        sys.stdout.flush()
+
+        # 1-3. Retrieval + context (identical to query())
+        vector_chunks = self.vector_retriever.retrieve(user_message)
+        graph_context = self.graph_retriever.retrieve(user_message)
+        context = self.context_builder.build(vector_chunks, graph_context)
+        messages = self._build_messages(user_message, context, chat_history)
+
+        # 4. Stream the answer, accumulating the raw text.
+        print("[QueryEngine] Streaming answer with LLM...")
+        sys.stdout.flush()
+        parts: list[str] = []
+        for token in self.llm.generate_with_history_stream(
+            messages=messages, max_tokens=LLMConfig.MAX_TOKENS,
+        ):
+            parts.append(token)
+            yield {"type": "token", "text": token}
+
+        raw_answer = "".join(parts)
+        answer = self._clean_answer(raw_answer)
+        if not answer:
+            answer = "I'm sorry, I wasn't able to generate a response. Please try rephrasing your question."
+
+        # 5. Post-process: sources, citations, entities, confidence.
+        sources = self.context_builder.extract_source_references(vector_chunks, graph_context)
+        self._mark_cited_sources(answer, sources)
+        entities_referenced = [e.get("name", "") for e in graph_context.get("entities", [])]
+        confidence = self._compute_confidence(answer, vector_chunks, sources, graph_context)
+
+        print(f"[QueryEngine] Stream done. {len(answer)} chars, {len(sources)} sources, "
+              f"confidence: {confidence['label']} ({confidence['score']}).")
+        sys.stdout.flush()
+
+        yield {
+            "type": "done",
+            "answer": answer,
+            "sources": sources,
+            "entities_referenced": entities_referenced,
+            "confidence": confidence,
+        }
+
     @staticmethod
     def _compute_confidence(answer: str, vector_chunks: list[dict],
                             sources: list[dict], graph_context: dict) -> dict:

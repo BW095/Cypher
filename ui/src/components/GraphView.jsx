@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, baseName, entityColor } from '../api'
+import { api, baseName, entityColor, relationshipColor } from '../api'
 import { IconGraph, IconRefresh } from '../icons'
 import ForceGraph from './ForceGraph'
 
-function Legend({ types }) {
+function Legend({ types, colorFn = entityColor }) {
   if (!types.length) return null
   return (
     <div className="graph-legend">
       {types.map((t) => (
         <span className="legend-item" key={t}>
-          <span className="legend-dot" style={{ background: entityColor(t) }} />
+          <span className="legend-dot" style={{ background: colorFn(t) }} />
           {t.replace(/_/g, ' ')}
         </span>
       ))}
@@ -87,6 +87,12 @@ export default function GraphView() {
     return [...present].sort()
   }, [fullGraph])
 
+  // Relationship types present in the full graph, for the edge legend.
+  const relLegendTypes = useMemo(() => {
+    const present = new Set(fullGraph.edges.map((e) => e.type).filter(Boolean))
+    return [...present].sort()
+  }, [fullGraph])
+
   const resultSubgraph = useMemo(
     () => (result ? { nodes: result.nodes, edges: result.edges } : null),
     [result]
@@ -135,6 +141,9 @@ export default function GraphView() {
           </div>
 
           <Legend types={legendTypes} />
+          {relLegendTypes.length > 0 && (
+            <Legend types={relLegendTypes} colorFn={relationshipColor} />
+          )}
 
           {loadingGraph ? (
             <div className="empty-row">Loading graph…</div>
@@ -219,8 +228,16 @@ export default function GraphView() {
                               <div className="graph-item edge" key={idx}>
                                 <div className="edge-node">{src}</div>
                                 <div className="edge-connection">
-                                  <div className="edge-line"></div>
-                                  <span className="edge-label">{e.type}</span>
+                                  <div
+                                    className="edge-line"
+                                    style={{ background: relationshipColor(e.type) }}
+                                  ></div>
+                                  <span
+                                    className="edge-label"
+                                    style={{ color: relationshipColor(e.type) }}
+                                  >
+                                    {e.type}
+                                  </span>
                                 </div>
                                 <div className="edge-node">{tgt}</div>
                               </div>

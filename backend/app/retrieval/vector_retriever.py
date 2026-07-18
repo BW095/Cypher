@@ -9,7 +9,7 @@ import sys
 from app.ai.embeddings import BGEWrapper
 from app.storage.qdrant import QdrantStorage
 from app.config import RetrievalConfig
-from app.retrieval.reranker import rerank
+from app.retrieval.reranker import rerank, rerank_cross_encoder
 
 
 class VectorRetriever:
@@ -66,12 +66,23 @@ class VectorRetriever:
                 "metadata": metadata,
             })
 
-        # 4. Hybrid rerank (vector + lexical) and trim to top_k
-        results = rerank(query, candidates, top_k=top_k)
+        # 4. Rerank the candidate pool and trim to top_k. Prefer the
+        #    cross-encoder (query+passage scored together); fall back to the
+        #    lexical reranker if it's disabled or the model can't be loaded.
+        results = None
+        rerank_kind = "lexical"
+        if RetrievalConfig.USE_CROSS_ENCODER:
+            results = rerank_cross_encoder(
+                query, candidates, top_k=top_k, model_name=RetrievalConfig.RERANK_MODEL,
+            )
+            if results is not None:
+                rerank_kind = "cross-encoder"
+        if results is None:
+            results = rerank(query, candidates, top_k=top_k)
 
         if results:
             print(f"[VectorRetriever] {len(candidates)} candidates -> top {len(results)} "
-                  f"after rerank (top vector {results[0]['score']:.3f}, "
+                  f"after {rerank_kind} rerank (top vector {results[0]['score']:.3f}, "
                   f"rerank {results[0].get('rerank_score', 0):.3f})")
         else:
             print("[VectorRetriever] No chunks found")

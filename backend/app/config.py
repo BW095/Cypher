@@ -54,6 +54,13 @@ class ModelConfig:
     )
     BGE_MODEL_NAME: str = os.getenv("BGE_MODEL_NAME", "BAAI/bge-base-en-v1.5")
 
+    # Optional smaller model used ONLY for entity extraction during ingestion.
+    # Extraction makes many long-output LLM calls, so a small GGUF (e.g. a
+    # 1.5–3B instruct model) runs several times faster and can stay fully on
+    # GPU. Empty string = reuse the main model (no behavior change). Set this to
+    # a local .gguf path to enable the faster extraction path.
+    EXTRACTION_MODEL_PATH: str = os.getenv("EXTRACTION_MODEL_PATH", "")
+
 
 # ---------------------------------------------------------------------------
 # Retrieval parameters
@@ -65,6 +72,16 @@ class RetrievalConfig:
     MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "5"))
     # Over-fetch this many vector hits, then rerank down to VECTOR_TOP_K.
     VECTOR_FETCH_K: int = int(os.getenv("VECTOR_FETCH_K", "15"))
+
+    # Cross-encoder reranking. When on, the over-fetched candidates are scored
+    # by a cross-encoder (query+passage together) — far more precise than the
+    # lexical fallback. Runs on CPU to keep the GPU free for the LLM. Falls back
+    # to the lexical reranker automatically if the model can't be loaded.
+    USE_CROSS_ENCODER: bool = os.getenv("USE_CROSS_ENCODER", "true").lower() in ("1", "true", "yes")
+    # Default to a small, fast cross-encoder (~80MB) that reranks well on CPU —
+    # a good fit for a 6GB laptop. For higher accuracy set RERANK_MODEL to
+    # "BAAI/bge-reranker-base" (~1.1GB, slower on CPU) once it's cached locally.
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 
 # ---------------------------------------------------------------------------

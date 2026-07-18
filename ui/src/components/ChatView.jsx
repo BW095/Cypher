@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { api, baseName } from '../api'
-import { LogoMark, IconSend, IconChevron, IconFile, IconExternal, IconQuote } from '../icons'
+import { LogoMark, IconSend, IconStop, IconChevron, IconFile, IconExternal, IconQuote } from '../icons'
 
 const SUGGESTIONS = [
   'Summarize the latest maintenance reports',
@@ -87,24 +87,40 @@ function Sources({ sources }) {
   )
 }
 
+function TypingDots() {
+  return (
+    <div className="typing">
+      <span />
+      <span />
+      <span />
+    </div>
+  )
+}
+
 function Message({ msg }) {
   const roleClass = msg.error ? 'assistant error' : msg.role
+  const isAssistant = msg.role === 'assistant' && !msg.error
+  // A streaming assistant bubble with no text yet shows the typing indicator.
+  const waiting = isAssistant && msg.streaming && !msg.content
   return (
     <div className={`msg ${roleClass}`}>
       <div className="msg-meta">
         <span className="msg-author">{msg.role === 'user' ? 'You' : 'Cypher'}</span>
-        {msg.role === 'assistant' && !msg.error && (
-          <ConfidenceBadge confidence={msg.confidence} />
-        )}
+        {isAssistant && !msg.streaming && <ConfidenceBadge confidence={msg.confidence} />}
       </div>
       <div className="msg-body">
-        {msg.role === 'assistant' && !msg.error ? (
-          <ReactMarkdown>{msg.content}</ReactMarkdown>
+        {waiting ? (
+          <TypingDots />
+        ) : isAssistant ? (
+          <>
+            <ReactMarkdown>{msg.content}</ReactMarkdown>
+            {msg.streaming && <span className="stream-cursor" />}
+          </>
         ) : (
           msg.content
         )}
       </div>
-      {msg.role === 'assistant' && <Sources sources={msg.sources} />}
+      {isAssistant && !msg.streaming && <Sources sources={msg.sources} />}
     </div>
   )
 }
@@ -115,6 +131,7 @@ export default function ChatView({ sessionId, onSessionCreated }) {
   const [busy, setBusy] = useState(false)
   const threadRef = useRef(null)
   const textareaRef = useRef(null)
+  const abortRef = useRef(null)  // AbortController for the in-flight stream
 
   // Load history when switching sessions
   useEffect(() => {
@@ -163,30 +180,69 @@ export default function ChatView({ sessionId, onSessionCreated }) {
 
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    setMessages((prev) => [...prev, { role: 'user', content: question }])
+    // Append the user turn plus an empty, streaming assistant bubble.
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: question },
+      { role: 'assistant', content: '', streaming: true },
+    ])
     setBusy(true)
 
+    // Helper: update the last message (the streaming assistant bubble) in place.
+    const patchLast = (patch) =>
+      setMessages((prev) => {
+        const next = [...prev]
+        const last = next[next.length - 1]
+        if (last && last.role === 'assistant') {
+          next[next.length - 1] =
+            typeof patch === 'function' ? patch(last) : { ...last, ...patch }
+        }
+        return next
+      })
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      const res = await api.ask(question, sessionId)
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: res.answer,
-          sources: res.sources,
-          confidence: res.confidence,
+      await api.askStream(question, sessionId, {
+        signal: controller.signal,
+        onSession: (sid) => {
+          if (!sessionId && sid) onSessionCreated(sid)
         },
-      ])
-      if (!sessionId && res.session_id) onSessionCreated(res.session_id)
+        onToken: (text) =>
+          patchLast((last) => ({ ...last, content: last.content + text })),
+        onDone: (ev) =>
+          patchLast({
+            content: ev.answer,
+            sources: ev.sources,
+            confidence: ev.confidence,
+            streaming: false,
+          }),
+      })
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', error: true, content: `Request failed: ${err.message}` },
-      ])
+      if (err.name === 'AbortError') {
+        // User pressed Stop — keep whatever streamed so far, mark a note.
+        patchLast((last) => ({
+          ...last,
+          streaming: false,
+          content: last.content
+            ? `${last.content}\n\n_(stopped)_`
+            : '_(stopped before any output)_',
+        }))
+      } else {
+        patchLast({
+          error: true,
+          streaming: false,
+          content: `Request failed: ${err.message}`,
+        })
+      }
     } finally {
+      abortRef.current = null
       setBusy(false)
     }
   }
+
+  const stop = () => abortRef.current?.abort()
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -223,18 +279,6 @@ export default function ChatView({ sessionId, onSessionCreated }) {
             {messages.map((m, i) => (
               <Message key={i} msg={m} />
             ))}
-            {busy && (
-              <div className="msg assistant">
-                <div className="msg-meta">
-                  <span className="msg-author">Cypher</span>
-                </div>
-                <div className="typing">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -253,14 +297,24 @@ export default function ChatView({ sessionId, onSessionCreated }) {
             onKeyDown={onKeyDown}
             disabled={busy}
           />
-          <button
-            className="send-btn"
-            onClick={() => send()}
-            disabled={busy || !input.trim()}
-            title="Send"
-          >
-            <IconSend size={17} />
-          </button>
+          {busy ? (
+            <button
+              className="send-btn stop-btn"
+              onClick={stop}
+              title="Stop generating"
+            >
+              <IconStop size={16} />
+            </button>
+          ) : (
+            <button
+              className="send-btn"
+              onClick={() => send()}
+              disabled={!input.trim()}
+              title="Send"
+            >
+              <IconSend size={17} />
+            </button>
+          )}
         </div>
         <div className="composer-hint">
           Enter to send · Shift+Enter for a new line · Answers cite tracked documents

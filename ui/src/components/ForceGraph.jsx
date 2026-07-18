@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { entityColor } from '../api'
+import { entityColor, relationshipColor } from '../api'
+
+// Hex color -> rgba string at a given alpha, so edges read as tinted-but-subtle.
+function withAlpha(hex, alpha) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '')
+  if (!m) return `rgba(154,163,178,${alpha})`
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => parseInt(h, 16))
+  return `rgba(${r},${g},${b},${alpha})`
+}
 
 /**
  * Interactive force-directed view of a knowledge subgraph.
@@ -75,7 +83,7 @@ export default function ForceGraph({ data, onNodeClick, height = 460 }) {
         }
         onNodeHover={(n) => setHovered(n ? n.id : null)}
         onNodeClick={(n) => onNodeClick && onNodeClick(n)}
-        linkColor={() => 'rgba(154,163,178,0.35)'}
+        linkColor={(l) => withAlpha(relationshipColor(l.type), hovered ? 0.28 : 0.45)}
         linkWidth={1}
         linkDirectionalArrowLength={4}
         linkDirectionalArrowRelPos={1}

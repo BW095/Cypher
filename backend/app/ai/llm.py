@@ -15,11 +15,9 @@ from app.ai.model_manager import get_model_manager
 
 class LLMWrapper:
     def __init__(self, model_path: str = None):
-        # model_path override is honored only if no manager exists yet;
-        # the whole app shares one model slot by design.
-        self.manager = get_model_manager()
-        if model_path:
-            self.manager.model_path = model_path
+        # Each distinct model_path gets its own shared manager/worker. None
+        # (the common case) resolves to the main chat model.
+        self.manager = get_model_manager(model_path or None)
 
     def generate(self, prompt: str, system_prompt: str = "You are a helpful AI assistant.",
                  max_tokens: int = 1024) -> str:
@@ -35,6 +33,10 @@ class LLMWrapper:
     def generate_with_history(self, messages: list[dict], max_tokens: int = 1024) -> str:
         """Multi-turn generation with a full message history. '' on failure."""
         return self.manager.chat(messages=messages, max_tokens=max_tokens)
+
+    def generate_with_history_stream(self, messages: list[dict], max_tokens: int = 1024):
+        """Streaming variant of generate_with_history — yields text chunks."""
+        yield from self.manager.chat_stream(messages=messages, max_tokens=max_tokens)
 
     def extract_entities(self, text: str) -> str:
         """Legacy method — kept for backward compatibility."""

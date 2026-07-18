@@ -116,6 +116,22 @@ for line in sys.stdin:
             reply({"ok": True, "result": out["choices"][0]["message"]["content"],
                    "n_gpu_layers": LOADED_LAYERS})
 
+        elif op == "chat_stream":
+            load_model()
+            stream = LLM.create_chat_completion(
+                messages=req["messages"],
+                max_tokens=req.get("max_tokens", 1024),
+                temperature=req.get("temperature", 0.1),
+                stream=True,
+            )
+            # Emit each token as its own protocol line, then a terminal marker.
+            for part in stream:
+                delta = part["choices"][0].get("delta", {})
+                piece = delta.get("content")
+                if piece:
+                    reply({"ok": True, "chunk": piece})
+            reply({"ok": True, "done": True, "n_gpu_layers": LOADED_LAYERS})
+
         elif op == "vision":
             load_model()
             import base64
@@ -185,6 +201,34 @@ class ModelManager:
             "temperature": LLMConfig.TEMPERATURE if temperature is None else temperature,
         }
         return self._run_inference(req, vision=False)
+
+    def chat_stream(self, messages: list[dict], max_tokens: int = None,
+                    temperature: float = None):
+        """Stream a chat completion token-by-token. Yields text chunks.
+
+        Holds the model lock for the whole generation (the single worker can
+        only serve one request at a time), so callers should consume it
+        promptly. Yields nothing on failure.
+        """
+        req = {
+            "op": "chat_stream",
+            "messages": messages,
+            "max_tokens": max_tokens or LLMConfig.MAX_TOKENS,
+            "temperature": LLMConfig.TEMPERATURE if temperature is None else temperature,
+        }
+        with self._lock:
+            try:
+                self._ensure_loaded(False)
+            except ModelManagerError as e:
+                print(f"[ModelManager] {e}")
+                return
+            try:
+                yield from self._request_stream(req, idle_timeout=LLMConfig.SUBPROCESS_TIMEOUT)
+            except ModelManagerError as e:
+                print(f"[ModelManager] Streaming inference failed: {e}")
+                self._stop_worker()  # fresh start next time
+            finally:
+                self._last_used = time.time()
 
     def analyze_image(self, image_path: str, prompt: str,
                       max_tokens: int = 256) -> str:
@@ -372,6 +416,81 @@ class ModelManager:
             except json.JSONDecodeError:
                 continue  # stray non-protocol line; keep reading
 
+    def _request_stream(self, req: dict, idle_timeout: int):
+        """Send a streaming request and yield token chunks until the worker
+        signals `done`. `idle_timeout` bounds the wait *between* tokens, not the
+        whole generation (which is naturally bounded by max_tokens).
+        """
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            raise ModelManagerError("Worker process is not running.")
+        try:
+            proc.stdin.write(json.dumps(req) + "\n")
+            proc.stdin.flush()
+        except OSError as e:
+            raise ModelManagerError(f"Could not write to worker: {e}")
+
+        try:
+            while True:
+                msg = self._read_one(proc, idle_timeout, op=req.get("op"))
+                if msg.get("done"):
+                    return
+                if not msg.get("ok", True):
+                    raise ModelManagerError(msg.get("error", "stream error"))
+                chunk = msg.get("chunk")
+                if chunk:
+                    yield chunk
+        except GeneratorExit:
+            # Consumer stopped early (e.g. client disconnect). The worker is
+            # still generating; drain the rest so the leftover lines don't
+            # corrupt the next request. If it doesn't finish quickly, restart.
+            self._drain_stream(proc, timeout=30)
+            raise
+
+    def _read_one(self, proc, timeout: int, op: str = None) -> dict:
+        """Block until the next JSON protocol line arrives (or timeout)."""
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise ModelManagerError(f"Worker timed out after {timeout}s (op={op}).")
+            try:
+                line = self._stdout_queue.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                if proc.poll() is not None:
+                    raise ModelManagerError(
+                        f"Worker exited unexpectedly (code {proc.returncode}).")
+                continue
+            if line is None:  # stdout closed
+                raise ModelManagerError(f"Worker closed unexpectedly (code {proc.poll()}).")
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue  # stray non-protocol line; keep reading
+
+    def _drain_stream(self, proc, timeout: int):
+        """Discard remaining stream lines until the terminal marker, so the
+        worker is reusable. Restarts the worker if draining doesn't complete."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                line = self._stdout_queue.get(timeout=min(deadline - time.time(), 1.0))
+            except queue.Empty:
+                if proc.poll() is not None:
+                    return
+                continue
+            if line is None:
+                return
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("done") or not msg.get("ok", True):
+                return
+        # Never reached the terminal marker — drop the worker so leftover
+        # tokens can't be misread as the next request's reply.
+        self._stop_worker()
+
     def _drain_stdout(self, proc, q):
         try:
             for line in proc.stdout:
@@ -418,21 +537,32 @@ class ModelManager:
 # ---------------------------------------------------------------------------
 # Singleton accessor
 # ---------------------------------------------------------------------------
-_manager: ModelManager | None = None
+# One manager per distinct model path. The main chat model lives under the
+# default key; an optional extraction model gets its own manager (and its own
+# worker process), so the two never fight over the same slot. Each manager
+# plans its GPU offload from whatever VRAM is free at load time, so they
+# coexist safely on a small GPU (the busier one simply spills to CPU).
+_managers: dict[str, ModelManager] = {}
 _manager_lock = threading.Lock()
 
 
-def get_model_manager() -> ModelManager:
-    global _manager
+def get_model_manager(model_path: str | None = None) -> ModelManager:
+    """Return the shared manager for `model_path` (None = the main chat model)."""
+    key = model_path or "__default__"
     with _manager_lock:
-        if _manager is None:
-            _manager = ModelManager()
-        return _manager
+        m = _managers.get(key)
+        if m is None:
+            m = ModelManager(model_path=model_path)
+            _managers[key] = m
+        return m
 
 
 def shutdown_model_manager():
-    global _manager
+    """Stop every model worker and free all VRAM/RAM."""
     with _manager_lock:
-        if _manager is not None:
-            _manager.unload()
-            _manager = None
+        for m in _managers.values():
+            try:
+                m.unload()
+            except Exception:
+                pass
+        _managers.clear()

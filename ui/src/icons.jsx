@@ -51,6 +51,12 @@ export const IconSend = (p) => (
   </Icon>
 )
 
+export const IconStop = (p) => (
+  <Icon {...p}>
+    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
 export const IconTrash = (p) => (
   <Icon {...p}>
     <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />

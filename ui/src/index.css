@@ -692,6 +692,24 @@ textarea {
   }
 }
 
+/* Blinking caret shown at the end of an answer while it streams in. */
+.stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 /* Composer */
 
 .composer-wrap {
@@ -751,6 +769,16 @@ textarea {
 .send-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* While generating, the send button becomes a Stop control. */
+.send-btn.stop-btn {
+  background: var(--err, #f87171);
+  color: #14161a;
+}
+
+.send-btn.stop-btn:hover {
+  filter: brightness(1.08);
 }
 
 .composer-hint {
