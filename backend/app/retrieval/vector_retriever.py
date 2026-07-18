@@ -9,6 +9,7 @@ import sys
 from app.ai.embeddings import BGEWrapper
 from app.storage.qdrant import QdrantStorage
 from app.config import RetrievalConfig
+from app.retrieval.reranker import rerank
 
 
 class VectorRetriever:
@@ -29,6 +30,9 @@ class VectorRetriever:
             {text: str, score: float, source: str, file_type: str, metadata: dict}
         """
         top_k = top_k or RetrievalConfig.VECTOR_TOP_K
+        # Over-fetch, then rerank down to top_k so exact tag/code matches can
+        # climb above chunks that are merely close in embedding space.
+        fetch_k = max(top_k, RetrievalConfig.VECTOR_FETCH_K)
 
         print(f"[VectorRetriever] Embedding query: '{query[:80]}...'")
         sys.stdout.flush()
@@ -36,25 +40,25 @@ class VectorRetriever:
         # 1. Embed the query
         query_vector = self.embedding_model.embed_query(query)
 
-        # 2. Search Qdrant
+        # 2. Search Qdrant (fetch a wider candidate pool for reranking)
         if file_type or source_path:
             raw_hits = self.qdrant_db.search_with_filter(
                 query_vector=query_vector,
-                top_k=top_k,
+                top_k=fetch_k,
                 file_type=file_type,
                 source_path=source_path,
             )
         else:
             raw_hits = self.qdrant_db.search(
                 query_vector=query_vector,
-                top_k=top_k,
+                top_k=fetch_k,
             )
 
         # 3. Normalize into a clean format
-        results = []
+        candidates = []
         for hit in raw_hits:
             metadata = hit.get("metadata", {})
-            results.append({
+            candidates.append({
                 "text": hit.get("text", ""),
                 "score": hit.get("score", 0.0),
                 "source": metadata.get("source", "unknown"),
@@ -62,7 +66,15 @@ class VectorRetriever:
                 "metadata": metadata,
             })
 
-        print(f"[VectorRetriever] Found {len(results)} chunks (top score: {results[0]['score']:.3f})" if results else "[VectorRetriever] No chunks found")
+        # 4. Hybrid rerank (vector + lexical) and trim to top_k
+        results = rerank(query, candidates, top_k=top_k)
+
+        if results:
+            print(f"[VectorRetriever] {len(candidates)} candidates -> top {len(results)} "
+                  f"after rerank (top vector {results[0]['score']:.3f}, "
+                  f"rerank {results[0].get('rerank_score', 0):.3f})")
+        else:
+            print("[VectorRetriever] No chunks found")
         sys.stdout.flush()
 
         return results

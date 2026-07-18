@@ -16,6 +16,8 @@ pass produces an audit-style narrative over the compiled findings.
 
 import os
 import sys
+import html
+from datetime import datetime
 
 _PROCEDURE_TYPES = {"PROCEDURE"}
 _ASSET_TYPES = {"EQUIPMENT", "COMPONENT"}
@@ -100,6 +102,22 @@ class ComplianceAnalyzer:
             "gaps": sum(1 for f in findings if f["status"] == "gap"),
         }
 
+    def evidence_pack(self, regulation: str | None = None, use_llm: bool = False) -> dict:
+        """Build the data for an audit evidence package.
+
+        If `regulation` is given, restricts the report to that one regulation
+        (case-insensitive). Returns the same shape as analyze(), filtered.
+        """
+        report = self.analyze(use_llm=use_llm)
+        if regulation:
+            reg_l = regulation.strip().lower()
+            report["regulations"] = [
+                r for r in report["regulations"]
+                if r.get("name", "").lower() == reg_l
+            ]
+            report["summary"] = self._summary(report["regulations"])
+        return report
+
     def _narrate(self, findings):
         """One LLM pass producing an auditor-style summary of the findings."""
         lines = []
@@ -124,3 +142,93 @@ class ComplianceAnalyzer:
         except Exception as e:
             print(f"[Compliance] LLM narrative failed: {e}")
             return None
+
+
+# ---------------------------------------------------------------------------
+# Audit evidence package renderer (pure — no DB/LLM)
+# ---------------------------------------------------------------------------
+
+_STATUS_COLOR = {"covered": "#2e7d32", "partial": "#b8860b", "gap": "#c62828"}
+
+
+def render_evidence_html(report: dict, title: str = "Compliance Evidence Package") -> str:
+    """Render an analyze()/evidence_pack() report as a self-contained,
+    printable HTML document (browser 'Print to PDF' produces the audit PDF)."""
+    e = html.escape
+    s = report.get("summary", {})
+    regs = report.get("regulations", [])
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def li_list(items):
+        items = [i for i in items if i]
+        if not items:
+            return '<span class="none">None linked</span>'
+        return "<ul>" + "".join(f"<li>{e(str(i))}</li>" for i in items) + "</ul>"
+
+    cards = []
+    for r in regs:
+        status = r.get("status", "gap")
+        color = _STATUS_COLOR.get(status, "#555")
+        gap = (f'<div class="gap"><strong>Gap:</strong> {e(r.get("gap_reason",""))}</div>'
+               if r.get("gap_reason") else "")
+        cards.append(f"""
+        <section class="card">
+          <div class="card-head">
+            <h2>{e(r.get('name',''))}</h2>
+            <span class="badge" style="background:{color}">{e(status.upper())}</span>
+          </div>
+          {f'<p class="desc">{e(r.get("description",""))}</p>' if r.get('description') else ''}
+          <div class="grid">
+            <div><h3>Linked Procedures</h3>{li_list(r.get('linked_procedures', []))}</div>
+            <div><h3>Linked Equipment</h3>{li_list(r.get('linked_equipment', []))}</div>
+            <div><h3>Evidence Documents</h3>{li_list(r.get('evidence_documents', []))}</div>
+          </div>
+          {gap}
+        </section>""")
+
+    narrative = ""
+    if report.get("narrative"):
+        narrative = f'<section class="card narrative"><h2>Auditor Narrative</h2><pre>{e(report["narrative"])}</pre></section>'
+
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>{e(title)}</title>
+<style>
+  body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; color:#1a1a1a;
+         max-width: 900px; margin: 0 auto; padding: 40px 28px; }}
+  header {{ border-bottom: 3px solid #e8a33d; padding-bottom: 16px; margin-bottom: 24px; }}
+  h1 {{ margin: 0 0 4px; font-size: 24px; }}
+  .meta {{ color:#666; font-size: 13px; }}
+  .summary {{ display:flex; gap:14px; margin: 20px 0; flex-wrap:wrap; }}
+  .summary div {{ border:1px solid #ddd; border-radius:8px; padding:10px 16px; text-align:center; }}
+  .summary .n {{ font-size:22px; font-weight:700; }}
+  .summary .l {{ font-size:12px; color:#666; text-transform:uppercase; letter-spacing:.05em; }}
+  .card {{ border:1px solid #ddd; border-radius:10px; padding:18px 20px; margin-bottom:16px;
+          page-break-inside: avoid; }}
+  .card-head {{ display:flex; align-items:center; justify-content:space-between; }}
+  .card-head h2 {{ margin:0; font-size:18px; }}
+  .badge {{ color:#fff; font-size:12px; font-weight:700; padding:3px 10px; border-radius:20px; }}
+  .desc {{ color:#444; margin:8px 0 12px; }}
+  .grid {{ display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }}
+  .grid h3 {{ font-size:12px; text-transform:uppercase; color:#888; letter-spacing:.05em; margin:0 0 6px; }}
+  ul {{ margin:0; padding-left:18px; font-size:14px; }}
+  .none {{ color:#c62828; font-size:13px; font-style:italic; }}
+  .gap {{ margin-top:12px; padding:10px 12px; background:#fdf0f0; border-left:3px solid #c62828;
+         border-radius:4px; font-size:14px; }}
+  .narrative pre {{ white-space:pre-wrap; font-family:inherit; font-size:14px; line-height:1.5; }}
+  @media print {{ body {{ padding: 0; }} }}
+</style></head>
+<body>
+  <header>
+    <h1>{e(title)}</h1>
+    <div class="meta">Generated by Cypher · {e(generated)}</div>
+  </header>
+  <div class="summary">
+    <div><div class="n">{s.get('total',0)}</div><div class="l">Regulations</div></div>
+    <div><div class="n">{s.get('covered',0)}</div><div class="l">Covered</div></div>
+    <div><div class="n">{s.get('partial',0)}</div><div class="l">Partial</div></div>
+    <div><div class="n">{s.get('gaps',0)}</div><div class="l">Gaps</div></div>
+  </div>
+  {narrative}
+  {''.join(cards) if cards else '<p>No regulations found in the knowledge graph.</p>'}
+</body></html>"""

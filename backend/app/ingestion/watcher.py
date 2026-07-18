@@ -3,21 +3,43 @@ import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from app.ingestion.pipeline import IngestionPipeline
+from app.ingestion.queue import IngestionQueue
 
 
 class DocumentHandler(FileSystemEventHandler):
-    def __init__(self, pipeline: IngestionPipeline):
+    def __init__(self, pipeline: IngestionPipeline, queue: IngestionQueue):
         self.pipeline = pipeline
+        self.queue = queue
+
+    def _tracked(self, path: str) -> bool:
+        _, ext = os.path.splitext(path)
+        return ext.lower() in self.pipeline.dispatcher.processors
 
     def on_created(self, event):
-        if not event.is_directory:
+        if not event.is_directory and self._tracked(event.src_path):
             print(f"New file detected via watch: {event.src_path}")
-            self.pipeline.process_file(event.src_path)
+            self.queue.submit(event.src_path, "process")
 
     def on_modified(self, event):
-        if not event.is_directory:
+        if not event.is_directory and self._tracked(event.src_path):
             print(f"File modified via watch: {event.src_path}")
-            self.pipeline.process_file(event.src_path)
+            self.queue.submit(event.src_path, "process")
+
+    def on_deleted(self, event):
+        if not event.is_directory and self._tracked(event.src_path):
+            print(f"File deleted via watch: {event.src_path}")
+            # Purge its chunks, graph node/links, and tracking row so the AI
+            # can no longer retrieve or cite a document that no longer exists.
+            self.queue.submit(event.src_path, "delete")
+
+    def on_moved(self, event):
+        # A rename/move is a delete of the old path + create of the new one.
+        if not event.is_directory:
+            print(f"File moved via watch: {event.src_path} -> {event.dest_path}")
+            if self._tracked(event.src_path):
+                self.queue.submit(event.src_path, "delete")
+            if self._tracked(event.dest_path):
+                self.queue.submit(event.dest_path, "process")
 
 
 class DirectoryWatcher:
@@ -25,6 +47,9 @@ class DirectoryWatcher:
         self.directory = directory_to_watch
         self.pipeline = pipeline
         self.observer = Observer()
+        # One serial, debounced worker in front of the pipeline.
+        self.queue = IngestionQueue(pipeline)
+        self._stop = False
 
     def _discover_and_sync_existing_files(self):
         """Crawls the folder on startup to catch files added while offline."""
@@ -35,28 +60,35 @@ class DirectoryWatcher:
             for file in files:
                 _, ext = os.path.splitext(file)
                 if ext.lower() in valid_extensions:
-                    full_path = os.path.join(root, file)
-
-                    # Optional: Query SQLite tracker here to skip if already 'completed'
-                    # For now, let's pass it to the pipeline to safely process/update
-                    try:
-                        self.pipeline.process_file(full_path)
-                    except Exception as e:
-                        print(f"Skipping startup file {full_path}: {e}")
+                    # Queue it; the pipeline's content-hash check skips files
+                    # already ingested and unchanged.
+                    self.queue.submit(os.path.join(root, file), "process")
 
     def start(self):
-        # 1. Catch up on historical files first
+        # 1. Catch up on historical files first (queued, non-blocking)
         self._discover_and_sync_existing_files()
 
         # 2. Start live watching
-        event_handler = DocumentHandler(self.pipeline)
+        event_handler = DocumentHandler(self.pipeline, self.queue)
         self.observer.schedule(event_handler, self.directory, recursive=True)
         self.observer.start()
         print(f"✨ Live-watching directory for new changes: {self.directory}")
 
         try:
-            while True:
+            while not self._stop:
                 time.sleep(1)
         except KeyboardInterrupt:
+            pass
+        finally:
             self.observer.stop()
+            self.queue.stop()
         self.observer.join()
+
+    def stop(self):
+        """Signal the watch loop to exit (used by the /api/ingest/stop route)."""
+        self._stop = True
+        try:
+            self.observer.stop()
+            self.queue.stop()
+        except Exception:
+            pass

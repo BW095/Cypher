@@ -103,6 +103,13 @@ class SQLiteStorage:
             row = cursor.fetchone()
             return row[0] if row else None
 
+    def remove_document(self, file_path: str):
+        """Delete a document's tracking row (used when the file is deleted)."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM documents WHERE file_path = ?", (file_path,))
+            conn.commit()
+
     def get_document_hash(self, file_path: str) -> str | None:
         """Return the stored content hash of a file, or None if never ingested."""
         with sqlite3.connect(self.db_path) as conn:

@@ -86,11 +86,6 @@ class IngestionPipeline:
                 self.neo4j_db.invalidate_entity_cache()
             except Exception:
                 pass
-            # New entities exist now — drop the retriever's name cache.
-            try:
-                self.neo4j_db.invalidate_entity_cache()
-            except Exception:
-                pass
 
             # 7. Mark as completed and record the content hash for change detection
             self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "completed")
@@ -102,3 +97,27 @@ class IngestionPipeline:
             self.tracker.add_or_update_document(file_path, "unknown", "failed")
             print(f"Ingestion failed for {file_path}. Error: {str(e)}")
             traceback.print_exc()
+
+    def delete_file(self, file_path: str):
+        """Remove a file's data from every store after it's deleted from disk.
+
+        Clears vector chunks (Qdrant), the Document node and its links plus any
+        now-orphaned entities (Neo4j), and the tracking row (SQLite), then
+        invalidates the entity-name cache. Safe to call for files that were
+        never fully ingested.
+        """
+        print(f"Removing deleted file from all stores: {file_path}")
+        sys.stdout.flush()
+        try:
+            self.qdrant_db.delete_by_source(file_path)
+        except Exception as e:
+            print(f"  Qdrant cleanup failed for {file_path}: {e}")
+        try:
+            self.neo4j_db.delete_document(file_path)
+            self.neo4j_db.invalidate_entity_cache()
+        except Exception as e:
+            print(f"  Neo4j cleanup failed for {file_path}: {e}")
+        try:
+            self.tracker.remove_document(file_path)
+        except Exception as e:
+            print(f"  SQLite cleanup failed for {file_path}: {e}")

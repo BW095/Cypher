@@ -89,10 +89,18 @@ export default function ComplianceView() {
               Run a deep LLM pass over the findings to generate an auditor-style narrative report and concrete recommendations.
             </p>
           </div>
-          <div style={{ marginLeft: 'auto' }}>
-            <button 
-              className="btn-primary" 
-              onClick={() => load(true)} 
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
+            <button
+              className="icon-btn"
+              style={{ padding: '9px 14px', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)' }}
+              onClick={() => window.open('/api/compliance/evidence?analyze=false', '_blank')}
+              title="Open a printable audit evidence package (Print to PDF)"
+            >
+              Export Evidence Pack
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => load(true)}
               disabled={busy}
             >
               {busy ? 'Analyzing...' : 'Run Audit Narrative'}

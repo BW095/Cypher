@@ -7,6 +7,7 @@ from app.ingestion.canonical_document import CanonicalDocument
 
 
 from app.ai.llm import LLMWrapper
+from app.config import ExtractionConfig
 class EntityExtractor:
     def __init__(self):
         self.llm = LLMWrapper()
@@ -66,39 +67,73 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
             print("  Skipping entity extraction: no text content.")
             return document
 
-        # Keep input text short so the LLM output (entities JSON) fits within max_tokens.
-        # Longer input = more entities = longer JSON output = higher truncation risk.
-        text_to_analyze = document.text[:2000]
+        # Window over the WHOLE document, not just the first 2000 chars, so
+        # entities deep inside long manuals/reports are captured. Each window
+        # is kept small enough that its entity-JSON output fits in max_tokens;
+        # results are merged and canonicalized once at the end.
+        windows = self._make_windows(
+            document.text,
+            size=ExtractionConfig.WINDOW_CHARS,
+            overlap=ExtractionConfig.WINDOW_OVERLAP,
+            max_windows=ExtractionConfig.MAX_WINDOWS,
+        )
+        print(f"  Extracting over {len(windows)} window(s) of {document.file_path}")
+        sys.stdout.flush()
 
-        try:
-            raw_response = self.llm.generate(
-                prompt=f"TEXT TO ANALYZE:\n{text_to_analyze}",
-                system_prompt=self.system_prompt,
-                max_tokens=2048
-            )
+        raw_entities: List[Dict] = []
+        raw_rels: List[Dict] = []
+        for idx, window in enumerate(windows):
+            try:
+                raw_response = self.llm.generate(
+                    prompt=f"TEXT TO ANALYZE:\n{window}",
+                    system_prompt=self.system_prompt,
+                    max_tokens=2048,
+                )
+                if not raw_response:
+                    print(f"    Window {idx + 1}: empty LLM response — skipping.")
+                    continue
+                ents, rels = self._parse_json_response(raw_response)
+                raw_entities.extend(ents)
+                raw_rels.extend(rels)
+            except Exception as e:
+                print(f"    Window {idx + 1}: extraction failed ({e})")
+                traceback.print_exc()
+                sys.stdout.flush()
 
-            if not raw_response:
-                print("  Warning: LLM returned empty response for entity extraction.")
-                return document
-
-            entities, relationships = self._parse_json_response(raw_response)
-
-            # Resolve every entity to a deterministic, cross-document canonical id so
-            # the same real-world thing (e.g. "Pump P-101") merges across all files
-            # in Neo4j instead of fragmenting into per-document islands.
-            entities, relationships = self._canonicalize(entities, relationships)
-
-            document.entities.extend(entities)
-            document.relationships.extend(relationships)
-            print(f"  Extracted {len(entities)} entities and {len(relationships)} relationships.")
-            sys.stdout.flush()
-
-        except Exception as e:
-            print(f"Failed to extract entities: {e}")
-            traceback.print_exc()
-            sys.stdout.flush()
+        # Resolve everything to deterministic canonical ids so the same
+        # real-world thing (e.g. "Pump P-101") merges across windows AND across
+        # documents in Neo4j instead of fragmenting into islands.
+        entities, relationships = self._canonicalize(raw_entities, raw_rels)
+        document.entities.extend(entities)
+        document.relationships.extend(relationships)
+        print(f"  Extracted {len(entities)} entities and {len(relationships)} "
+              f"relationships (merged from {len(windows)} window(s)).")
+        sys.stdout.flush()
 
         return document
+
+    @staticmethod
+    def _make_windows(text: str, size: int, overlap: int, max_windows: int) -> List[str]:
+        """Slice text into overlapping windows, breaking on whitespace so we
+        don't cut words. Capped at max_windows to bound LLM cost on huge files."""
+        text = text.strip()
+        if not text:
+            return []
+        if len(text) <= size:
+            return [text]
+
+        windows = []
+        start = 0
+        step = max(1, size - overlap)
+        while start < len(text) and len(windows) < max_windows:
+            end = min(start + size, len(text))
+            # Extend to the next whitespace so we don't split a word/tag.
+            if end < len(text):
+                nxt = text.find(" ", end)
+                end = nxt if nxt != -1 and nxt - end < 40 else end
+            windows.append(text[start:end].strip())
+            start += step
+        return windows
 
     # ------------------------------------------------------------------
     # Cross-document entity resolution

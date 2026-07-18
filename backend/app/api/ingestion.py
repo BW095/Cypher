@@ -80,9 +80,9 @@ async def stop_ingestion(req: IngestStopRequest):
     if watcher is None:
         raise HTTPException(status_code=404, detail=f"No active watcher for: {folder}")
 
-    # Stop the watchdog observer
+    # Stop the watch loop, its observer, and its ingestion queue worker.
     try:
-        watcher.observer.stop()
+        watcher.stop()
     except Exception:
         pass
 

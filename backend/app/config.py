@@ -63,6 +63,18 @@ class RetrievalConfig:
     GRAPH_SEARCH_DEPTH: int = int(os.getenv("GRAPH_SEARCH_DEPTH", "2"))
     MAX_CONTEXT_CHARS: int = int(os.getenv("MAX_CONTEXT_CHARS", "6000"))
     MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "5"))
+    # Over-fetch this many vector hits, then rerank down to VECTOR_TOP_K.
+    VECTOR_FETCH_K: int = int(os.getenv("VECTOR_FETCH_K", "15"))
+
+
+# ---------------------------------------------------------------------------
+# Entity extraction (full-document windowing)
+# ---------------------------------------------------------------------------
+class ExtractionConfig:
+    WINDOW_CHARS: int = int(os.getenv("EXTRACTION_WINDOW_CHARS", "2000"))
+    WINDOW_OVERLAP: int = int(os.getenv("EXTRACTION_WINDOW_OVERLAP", "200"))
+    # Cap windows so a 500-page manual can't spawn hundreds of LLM calls.
+    MAX_WINDOWS: int = int(os.getenv("EXTRACTION_MAX_WINDOWS", "8"))
 
 
 # ---------------------------------------------------------------------------
