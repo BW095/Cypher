@@ -82,6 +82,12 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
                 return document
 
             entities, relationships = self._parse_json_response(raw_response)
+
+            # Resolve every entity to a deterministic, cross-document canonical id so
+            # the same real-world thing (e.g. "Pump P-101") merges across all files
+            # in Neo4j instead of fragmenting into per-document islands.
+            entities, relationships = self._canonicalize(entities, relationships)
+
             document.entities.extend(entities)
             document.relationships.extend(relationships)
             print(f"  Extracted {len(entities)} entities and {len(relationships)} relationships.")
@@ -93,6 +99,92 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
             sys.stdout.flush()
 
         return document
+
+    # ------------------------------------------------------------------
+    # Cross-document entity resolution
+    # ------------------------------------------------------------------
+
+    # Canonical entity types (upper snake) the graph is built around.
+    _KNOWN_TYPES = {
+        "EQUIPMENT", "COMPONENT", "PROCESS_PARAMETER", "FAILURE", "PROCEDURE",
+        "REGULATION", "PERSONNEL", "MATERIAL", "LOCATION", "DATE",
+    }
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Normalize an entity name for stable matching.
+
+        Collapses case, whitespace and punctuation, and canonicalizes tag
+        numbers so 'Pump P-101', 'pump  p101' and 'PUMP P 101' all map to the
+        same key. Returns '' for empty/garbage names.
+        """
+        if not name:
+            return ""
+        s = name.strip().lower()
+        # Canonicalize equipment tags: letter-group + separators + digit-group
+        # -> "<letters><digits>" (e.g. "p-101" / "p 101" -> "p101").
+        s = re.sub(r'\b([a-z]{1,4})[\s\-_]*(\d{1,5})\b', r'\1\2', s)
+        # Drop remaining punctuation, collapse whitespace.
+        s = re.sub(r'[^a-z0-9\s]', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    @classmethod
+    def _normalize_type(cls, etype: str) -> str:
+        if not etype:
+            return "UNKNOWN"
+        t = etype.strip().upper().replace(" ", "_").replace("-", "_")
+        return t if t in cls._KNOWN_TYPES else t or "UNKNOWN"
+
+    def _canonicalize(self, entities: List[Dict], relationships: List[Dict]
+                      ) -> Tuple[List[Dict], List[Dict]]:
+        """Rewrite entity ids to canonical `type:normalized_name` keys and
+        remap relationship endpoints through the same mapping.
+
+        Deduplicates entities that collapse to the same key (keeping the
+        richest description) and drops relationships whose endpoints don't
+        resolve to a real entity.
+        """
+        old_to_canon: Dict[str, str] = {}
+        merged: Dict[str, Dict] = {}
+
+        for ent in entities:
+            name = (ent.get("name") or "").strip()
+            norm = self._normalize_name(name)
+            if not norm:
+                continue  # unusable entity — skip
+            etype = self._normalize_type(ent.get("type"))
+            canon_id = f"{etype.lower()}:{norm}".replace(" ", "_")
+
+            old_id = ent.get("id")
+            if old_id is not None:
+                old_to_canon[str(old_id)] = canon_id
+
+            desc = (ent.get("description") or "").strip()
+            if canon_id not in merged:
+                merged[canon_id] = {
+                    "id": canon_id, "name": name, "type": etype, "description": desc,
+                }
+            else:
+                # Same entity seen again — keep the longer description.
+                if len(desc) > len(merged[canon_id]["description"]):
+                    merged[canon_id]["description"] = desc
+
+        canon_rels = []
+        seen_rels = set()
+        for rel in relationships:
+            src = old_to_canon.get(str(rel.get("source_id")))
+            tgt = old_to_canon.get(str(rel.get("target_id")))
+            if not src or not tgt or src == tgt:
+                continue  # dangling or self-loop — drop
+            rtype = self._normalize_type(rel.get("type")) if rel.get("type") else "RELATES_TO"
+            key = (src, tgt, rtype)
+            if key in seen_rels:
+                continue
+            seen_rels.add(key)
+            canon_rels.append({"source_id": src, "target_id": tgt, "type": rtype})
+
+        return list(merged.values()), canon_rels
 
     def _parse_json_response(self, response: str) -> Tuple[List[Dict], List[Dict]]:
         """

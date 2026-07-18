@@ -25,6 +25,8 @@ class Dispatcher:
         # Office Documents
         '.docx': 'office', '.doc': 'office', '.pptx': 'office',
         '.ppt': 'office', '.odt': 'office', '.html': 'office', '.txt': 'office',
+        # Email archives
+        '.eml': 'email', '.msg': 'email',
     }
 
     def __init__(self):
@@ -91,6 +93,10 @@ class Dispatcher:
         elif group == 'excel':
             from app.processors.excel_processor import ExcelProcessor
             return ExcelProcessor()
+
+        elif group == 'email':
+            from app.processors.email_processor import EmailProcessor
+            return EmailProcessor()
 
         elif group == 'office':
             from app.processors.office_processor import OfficeProcessor

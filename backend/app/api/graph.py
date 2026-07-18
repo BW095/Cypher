@@ -4,8 +4,11 @@ Graph API routes — query and explore the knowledge graph.
 
 from fastapi import APIRouter
 
+from fastapi import Query
+
 from app.api.models import (
     GraphQueryRequest, GraphResponse, GraphNode, GraphEdge, GraphStatsResponse,
+    GraphFullResponse,
 )
 
 router = APIRouter(prefix="/api/graph", tags=["Knowledge Graph"])
@@ -49,6 +52,39 @@ async def query_graph(req: GraphQueryRequest):
             for e in result.get("edges", [])
         ],
         source_documents=result.get("source_documents", []),
+    )
+
+
+# -------------------------------------------------------------------------
+# GET /api/graph/full — the whole graph, for visualization
+# -------------------------------------------------------------------------
+@router.get("/full", response_model=GraphFullResponse)
+async def get_full_graph(limit: int = Query(400, ge=1, le=2000)):
+    """Return the entire knowledge graph (capped) for the force-graph view."""
+    neo4j_db = get_deps()
+    if neo4j_db is None:
+        return GraphFullResponse(nodes=[], edges=[])
+
+    data = neo4j_db.get_full_graph(limit=limit)
+    return GraphFullResponse(
+        nodes=[
+            GraphNode(
+                id=n.get("id", ""),
+                name=n.get("name", ""),
+                type=n.get("type", "Unknown"),
+                description=n.get("description", ""),
+                degree=n.get("degree", 0),
+            )
+            for n in data.get("nodes", [])
+        ],
+        edges=[
+            GraphEdge(
+                source=e.get("source", ""),
+                target=e.get("target", ""),
+                type=e.get("type", ""),
+            )
+            for e in data.get("edges", [])
+        ],
     )
 
 

@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-07-18T15:13:22.097325",
+  "sections": {
+    "entities": {
+      "status": "ok",
+      "macro": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "per_doc": [
+        {
+          "doc_id": "maint_log_p101",
+          "tp": 0,
+          "fp": 0,
+          "fn": 10,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "missed": [
+            "a kumar",
+            "bearing",
+            "bearing temperature 85 c",
+            "discharge pressure 6 bar",
+            "leaking",
+            "mechanical seal",
+            "mp07",
+            "pump p101",
+            "unit2",
+            "vibration"
+          ]
+        },
+        {
+          "doc_id": "boiler_inspection",
+          "tp": 0,
+          "fp": 0,
+          "fn": 9,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "missed": [
+            "boiler b2",
+            "cracking",
+            "hydrotest",
+            "is2825",
+            "peso",
+            "r mehta",
+            "refractory lining",
+            "safety relief valve srv12",
+            "set pressure 10 5 bar"
+          ]
+        },
+        {
+          "doc_id": "compressor_email",
+          "tp": 0,
+          "fp": 0,
+          "fn": 7,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "missed": [
+            "compressor c3",
+            "compressor house",
+            "high discharge temperature",
+            "intercooler",
+            "lube oil pressure",
+            "oisd116",
+            "trip"
+          ]
+        }
+      ]
+    },
+    "retrieval": {
+      "status": "skipped",
+      "reason": "No module named 'qdrant_client'"
+    },
+    "compliance": {
+      "status": "skipped",
+      "reason": "No module named 'neo4j'"
+    }
+  }
+}

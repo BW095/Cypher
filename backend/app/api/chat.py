@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.api.models import (
     ChatRequest, ChatResponse, ChatMessage, ChatSession,
-    ChatSessionDetail, SourceReference,
+    ChatSessionDetail, SourceReference, ConfidenceInfo,
 )
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
@@ -51,9 +51,15 @@ async def send_message(req: ChatRequest):
         chat_history=chat_history if chat_history else None,
     )
 
-    # Save the assistant response
+    # Save the assistant response (persist enough to rebuild the UI on reload)
     sources_for_db = [
-        {"file_path": s["file_path"], "file_type": s["file_type"], "relevance_score": s["relevance_score"]}
+        {
+            "file_path": s.get("file_path", ""),
+            "file_type": s.get("file_type", ""),
+            "chunk_text": s.get("chunk_text", ""),
+            "relevance_score": s.get("relevance_score", 0.0),
+            "cited": s.get("cited", False),
+        }
         for s in result.get("sources", [])
     ]
     db.add_message(session_id, "assistant", result["answer"], sources_for_db)
@@ -64,6 +70,7 @@ async def send_message(req: ChatRequest):
         sources=[SourceReference(**s) for s in result.get("sources", [])],
         session_id=session_id,
         entities_referenced=result.get("entities_referenced", []),
+        confidence=ConfidenceInfo(**result.get("confidence", {})),
     )
 
 

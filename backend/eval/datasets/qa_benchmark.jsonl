@@ -1,0 +1,5 @@
+{"question": "What is wrong with pump P-101 and what maintenance is required?", "expected_files": ["maint_log_p101.txt"], "must_include": ["vibration", "bearing", "P-101"]}
+{"question": "Which regulations apply to boiler B-2?", "expected_files": ["boiler_inspection.pdf"], "must_include": ["PESO", "IS 2825"]}
+{"question": "Why did compressor C-3 trip?", "expected_files": ["compressor_email.eml"], "must_include": ["discharge temperature", "C-3"]}
+{"question": "What is the discharge pressure of pump P-101 compared to its rated value?", "expected_files": ["maint_log_p101.txt"], "must_include": ["6 bar", "12 bar"]}
+{"question": "Who inspected boiler B-2 and when is the next hydrotest due?", "expected_files": ["boiler_inspection.pdf"], "must_include": ["Mehta", "2025-06-01"]}

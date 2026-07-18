@@ -25,10 +25,16 @@ class SQLiteStorage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_path TEXT UNIQUE,
                     file_type TEXT,
-                    status TEXT, 
-                    ingested_at TIMESTAMP
+                    status TEXT,
+                    ingested_at TIMESTAMP,
+                    content_hash TEXT
                 )
             """)
+            # Migration: add content_hash to pre-existing databases.
+            cursor.execute("PRAGMA table_info(documents)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "content_hash" not in cols:
+                cursor.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
 
             # Chat sessions table
             cursor.execute("""
@@ -96,6 +102,24 @@ class SQLiteStorage:
             cursor.execute("SELECT status FROM documents WHERE file_path = ?", (file_path,))
             row = cursor.fetchone()
             return row[0] if row else None
+
+    def get_document_hash(self, file_path: str) -> str | None:
+        """Return the stored content hash of a file, or None if never ingested."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT content_hash FROM documents WHERE file_path = ?", (file_path,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def set_document_hash(self, file_path: str, content_hash: str):
+        """Record the content hash of a successfully ingested file."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE documents SET content_hash = ? WHERE file_path = ?",
+                (content_hash, file_path),
+            )
+            conn.commit()
 
     def get_ingestion_stats(self) -> dict:
         """Return aggregate ingestion statistics."""

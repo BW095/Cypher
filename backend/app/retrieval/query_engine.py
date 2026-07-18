@@ -116,14 +116,70 @@ class QueryEngine:
         self._mark_cited_sources(answer, sources)
         entities_referenced = [e.get("name", "") for e in graph_context.get("entities", [])]
 
-        print(f"\n[QueryEngine] Done. Answer length: {len(answer)} chars, {len(sources)} sources cited.")
+        # 8. Estimate answer confidence from retrieval + citation signals
+        confidence = self._compute_confidence(answer, vector_chunks, sources, graph_context)
+
+        print(f"\n[QueryEngine] Done. Answer length: {len(answer)} chars, "
+              f"{len(sources)} sources, confidence: {confidence['label']} ({confidence['score']}).")
         sys.stdout.flush()
 
         return {
             "answer": answer,
             "sources": sources,
             "entities_referenced": entities_referenced,
+            "confidence": confidence,
         }
+
+    @staticmethod
+    def _compute_confidence(answer: str, vector_chunks: list[dict],
+                            sources: list[dict], graph_context: dict) -> dict:
+        """Estimate how much to trust the answer, from honest signals only.
+
+        Combines: strength of the best vector match, whether the answer
+        actually cited its sources, graph corroboration, and whether the model
+        itself signalled that context was insufficient. Returns
+        {score: 0..1, label: 'High'|'Medium'|'Low', reasons: [...]}.
+        """
+        reasons = []
+
+        # Signal 1: best retrieval relevance (cosine, ~0.3 weak .. ~0.7 strong)
+        top_score = max((c.get("score", 0.0) for c in vector_chunks), default=0.0)
+        retrieval = max(0.0, min(1.0, (top_score - 0.30) / 0.40))
+        if top_score:
+            reasons.append(f"top match {top_score:.2f}")
+
+        # Signal 2: did the answer cite any retrieved source?
+        cited = [s for s in sources if s.get("cited")]
+        citation = min(1.0, len(cited) / 2.0) if cited else 0.0
+        if cited:
+            reasons.append(f"{len(cited)} source(s) cited")
+        elif sources:
+            reasons.append("no sources cited in answer")
+
+        # Signal 3: graph corroboration
+        graph_hit = 0.0
+        if graph_context and graph_context.get("entities"):
+            graph_hit = 1.0
+            reasons.append("graph corroborated")
+
+        # Signal 4: explicit "not enough info" admission from the model
+        low_markers = ("i don't have", "not enough information", "no relevant",
+                       "isn't enough", "cannot answer", "couldn't find",
+                       "wasn't able", "does not contain", "no information")
+        answer_lower = (answer or "").lower()
+        insufficient = any(m in answer_lower for m in low_markers)
+        if insufficient:
+            reasons.append("model reported insufficient context")
+
+        score = 0.55 * retrieval + 0.30 * citation + 0.15 * graph_hit
+        if insufficient:
+            score = min(score, 0.35)
+        if not sources:
+            score = min(score, 0.20)
+        score = round(max(0.0, min(1.0, score)), 2)
+
+        label = "High" if score >= 0.66 else "Medium" if score >= 0.4 else "Low"
+        return {"score": score, "label": label, "reasons": reasons}
 
     def _build_messages(
         self,

@@ -26,12 +26,20 @@ class SourceReference(BaseModel):
     cited: bool = False  # True when the answer text actually references this file
 
 
+class ConfidenceInfo(BaseModel):
+    """How much to trust an answer, derived from retrieval/citation signals."""
+    score: float = 0.0            # 0..1
+    label: str = "Low"           # High | Medium | Low
+    reasons: List[str] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     """AI response to a chat message."""
     answer: str
     sources: List[SourceReference] = Field(default_factory=list)
     session_id: str
     entities_referenced: List[str] = Field(default_factory=list)
+    confidence: ConfidenceInfo = Field(default_factory=ConfidenceInfo)
 
 
 class ChatMessage(BaseModel):
@@ -122,6 +130,7 @@ class GraphNode(BaseModel):
     name: str
     type: str
     description: str = ""
+    degree: int = 0  # number of connected relationships (for sizing in the viz)
 
 
 class GraphEdge(BaseModel):
@@ -138,12 +147,47 @@ class GraphResponse(BaseModel):
     source_documents: List[str] = Field(default_factory=list)
 
 
+class GraphFullResponse(BaseModel):
+    """The whole knowledge graph (capped) for visualization."""
+    nodes: List[GraphNode] = Field(default_factory=list)
+    edges: List[GraphEdge] = Field(default_factory=list)
+
+
 class GraphStatsResponse(BaseModel):
     """High-level graph statistics."""
     total_entities: int = 0
     total_relationships: int = 0
     total_documents: int = 0
     entity_types: Dict[str, int] = Field(default_factory=dict)
+
+
+# ==========================================================================
+# Compliance Models
+# ==========================================================================
+
+class ComplianceRegulation(BaseModel):
+    """Coverage assessment for one regulation."""
+    name: str
+    description: str = ""
+    status: str  # covered | partial | gap
+    linked_procedures: List[str] = Field(default_factory=list)
+    linked_equipment: List[str] = Field(default_factory=list)
+    evidence_documents: List[str] = Field(default_factory=list)
+    gap_reason: str = ""
+
+
+class ComplianceSummary(BaseModel):
+    total: int = 0
+    covered: int = 0
+    partial: int = 0
+    gaps: int = 0
+
+
+class ComplianceResponse(BaseModel):
+    """Compliance gap analysis result."""
+    summary: ComplianceSummary = Field(default_factory=ComplianceSummary)
+    regulations: List[ComplianceRegulation] = Field(default_factory=list)
+    narrative: Optional[str] = None
 
 
 # ==========================================================================

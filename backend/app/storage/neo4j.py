@@ -85,6 +85,31 @@ class Neo4jStorage:
         except Exception as e:
             logging.error(f"Error merging relationship: {e}")
 
+    def delete_document(self, file_path: str):
+        """Remove a document's node and detach its links, for clean re-ingestion.
+
+        Entities are shared across documents (canonical ids), so we only remove
+        this document's MENTIONS edges and the Document node itself — never the
+        entities, which other documents may still reference. Entities that end
+        up orphaned (mentioned by no document) are then pruned.
+        """
+        try:
+            self.driver.execute_query(
+                "MATCH (d:Document {path: $file_path}) DETACH DELETE d",
+                file_path=file_path, database_=self.database,
+            )
+            # Prune entities no longer mentioned by any document.
+            self.driver.execute_query(
+                """
+                MATCH (e:Entity)
+                WHERE NOT (:Document)-[:MENTIONS]->(e)
+                DETACH DELETE e
+                """,
+                database_=self.database,
+            )
+        except Exception as e:
+            logging.error(f"Error deleting document {file_path} from graph: {e}")
+
     def _merge_document(self, document: CanonicalDocument):
         # Create/update the node for the document itself
         doc_query = """
@@ -123,6 +148,44 @@ class Neo4jStorage:
     # Retrieval / Query methods
     # ------------------------------------------------------------------
 
+    # Cache of (names, timestamp) so graph retrieval can match query terms
+    # against real entity names without hitting Neo4j on every keystroke.
+    _entity_name_cache = None
+    _entity_name_cache_ts = 0.0
+    _ENTITY_NAME_TTL = 60.0  # seconds
+
+    def get_all_entity_names(self) -> list[dict]:
+        """Return [{name, id, type}, ...] for every entity, cached briefly.
+
+        Used by the graph retriever to detect which entities a free-text
+        query actually refers to, instead of guessing from raw keywords.
+        """
+        import time
+        now = time.time()
+        cls = type(self)
+        if cls._entity_name_cache is not None and \
+                now - cls._entity_name_cache_ts < cls._ENTITY_NAME_TTL:
+            return cls._entity_name_cache
+        try:
+            records, _, _ = self.driver.execute_query(
+                "MATCH (e:Entity) RETURN e.id AS id, e.name AS name, e.type AS type",
+                database_=self.database,
+            )
+            names = [{"id": r["id"], "name": r["name"], "type": r["type"]}
+                     for r in records if r.get("name")]
+        except Exception as e:
+            logging.error(f"Error fetching entity names: {e}")
+            names = cls._entity_name_cache or []
+        cls._entity_name_cache = names
+        cls._entity_name_cache_ts = now
+        return names
+
+    def invalidate_entity_cache(self):
+        """Drop the entity-name cache (call after ingesting new documents)."""
+        cls = type(self)
+        cls._entity_name_cache = None
+        cls._entity_name_cache_ts = 0.0
+
     def search_entities(self, query_text: str, limit: int = 10) -> list[dict]:
         """Fuzzy search for entities whose name or description contains the query text."""
         query = """
@@ -140,6 +203,57 @@ class Neo4jStorage:
         except Exception as e:
             logging.error(f"Error searching entities: {e}")
             return []
+
+    def get_entities_by_type(self, entity_type: str, limit: int = 200) -> list[dict]:
+        """Return all entities of a given type (e.g. 'REGULATION')."""
+        query = """
+        MATCH (e:Entity)
+        WHERE toUpper(e.type) = toUpper($etype)
+        RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description
+        LIMIT $limit
+        """
+        try:
+            records, _, _ = self.driver.execute_query(
+                query, etype=entity_type, limit=limit, database_=self.database
+            )
+            return [dict(r) for r in records]
+        except Exception as e:
+            logging.error(f"Error fetching entities of type {entity_type}: {e}")
+            return []
+
+    def get_entity_neighborhood(self, entity_id: str) -> dict:
+        """Return the directly-connected entities and documents for one entity id.
+
+        Used by compliance analysis to see what procedures/equipment/evidence a
+        regulation is linked to. Returns {neighbors: [...], documents: [...]}.
+        """
+        try:
+            neighbor_records, _, _ = self.driver.execute_query(
+                """
+                MATCH (e:Entity {id: $id})-[r]-(n:Entity)
+                RETURN DISTINCT n.id AS id, n.name AS name, n.type AS type,
+                       n.description AS description, type(r) AS rel
+                """,
+                id=entity_id, database_=self.database,
+            )
+            doc_records, _, _ = self.driver.execute_query(
+                """
+                MATCH (d:Document)-[:MENTIONS]->(e:Entity {id: $id})
+                RETURN DISTINCT d.path AS path
+                """,
+                id=entity_id, database_=self.database,
+            )
+            neighbors = [{
+                "id": r["id"], "name": r["name"],
+                "type": r["type"] or "Unknown",
+                "description": r["description"] or "",
+                "rel": r["rel"],
+            } for r in neighbor_records]
+            documents = [r["path"] for r in doc_records if r.get("path")]
+            return {"neighbors": neighbors, "documents": documents}
+        except Exception as e:
+            logging.error(f"Error fetching neighborhood for {entity_id}: {e}")
+            return {"neighbors": [], "documents": []}
 
     def find_related_entities(self, entity_name: str, depth: int = 2) -> dict:
         """Find an entity by name and traverse up to `depth` hops.
@@ -271,6 +385,56 @@ class Neo4jStorage:
         except Exception as e:
             logging.error(f"Error finding documents for entity '{entity_name}': {e}")
             return []
+
+    def get_full_graph(self, limit: int = 400) -> dict:
+        """Return the whole entity graph (capped) for visualization.
+
+        Guarantees referential integrity: every returned edge's endpoints are
+        in the returned node set — react-force-graph throws otherwise. We cap
+        the node count and only include edges between surviving nodes.
+        """
+        try:
+            node_records, _, _ = self.driver.execute_query(
+                """
+                MATCH (e:Entity)
+                OPTIONAL MATCH (e)-[r:RELATED_TO]-()
+                WITH e, count(r) AS degree
+                RETURN e.id AS id, e.name AS name, e.type AS type,
+                       e.description AS description, degree
+                ORDER BY degree DESC
+                LIMIT $limit
+                """,
+                limit=limit, database_=self.database,
+            )
+            nodes = [{
+                "id": r["id"], "name": r["name"],
+                "type": r["type"] or "Unknown",
+                "description": r["description"] or "",
+                "degree": r["degree"],
+            } for r in node_records if r.get("id")]
+
+            node_ids = {n["id"] for n in nodes}
+            if not node_ids:
+                return {"nodes": [], "edges": []}
+
+            edge_records, _, _ = self.driver.execute_query(
+                """
+                MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
+                WHERE a.id IN $ids AND b.id IN $ids
+                RETURN a.id AS source, b.id AS target, r.type AS type
+                """,
+                ids=list(node_ids), database_=self.database,
+            )
+            edges = [{
+                "source": r["source"], "target": r["target"],
+                "type": r["type"] or "RELATED_TO",
+            } for r in edge_records
+                if r["source"] in node_ids and r["target"] in node_ids]
+
+            return {"nodes": nodes, "edges": edges}
+        except Exception as e:
+            logging.error(f"Error building full graph: {e}")
+            return {"nodes": [], "edges": []}
 
     def get_graph_stats(self) -> dict:
         """Return high-level graph statistics."""
