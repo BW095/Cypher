@@ -33,10 +33,15 @@ class QdrantStorage:
                 )
             )
 
-        self.client.upsert(
-            collection_name=self.collection_name,
-            points=points
-        )
+        try:
+            self.client.upsert(collection_name=self.collection_name, points=points)
+        except Exception as e:
+            # The collection can be deleted out from under a running process
+            # (e.g. clear.py). Recreate it and retry once instead of failing
+            # every ingestion until restart.
+            print(f"[Qdrant] Upsert failed ({e}); ensuring collection exists and retrying...")
+            self._init_collection()
+            self.client.upsert(collection_name=self.collection_name, points=points)
 
     # ------------------------------------------------------------------
     # Retrieval methods

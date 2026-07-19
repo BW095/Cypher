@@ -91,8 +91,7 @@ export default function ComplianceView() {
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
             <button
-              className="icon-btn"
-              style={{ padding: '9px 14px', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)' }}
+              className="btn-secondary"
               onClick={() => window.open('/api/compliance/evidence?analyze=false', '_blank')}
               title="Open a printable audit evidence package (Print to PDF)"
             >

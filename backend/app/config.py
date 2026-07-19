@@ -54,12 +54,16 @@ class ModelConfig:
     )
     BGE_MODEL_NAME: str = os.getenv("BGE_MODEL_NAME", "BAAI/bge-base-en-v1.5")
 
-    # Optional smaller model used ONLY for entity extraction during ingestion.
-    # Extraction makes many long-output LLM calls, so a small GGUF (e.g. a
-    # 1.5–3B instruct model) runs several times faster and can stay fully on
-    # GPU. Empty string = reuse the main model (no behavior change). Set this to
-    # a local .gguf path to enable the faster extraction path.
-    EXTRACTION_MODEL_PATH: str = os.getenv("EXTRACTION_MODEL_PATH", "")
+    # Smaller model used ONLY for entity extraction during ingestion.
+    # Extraction makes many long-output LLM calls, so a small GGUF (a 3B here)
+    # runs several times faster than the 8B and can stay fully on GPU. If this
+    # file is absent, extraction transparently falls back to the main model
+    # (see EntityExtractor), so a missing download never breaks ingestion.
+    # Set to "" to force using the main model.
+    EXTRACTION_MODEL_PATH: str = os.getenv(
+        "EXTRACTION_MODEL_PATH",
+        os.path.join(_PROJECT_ROOT, "models", "Qwen2.5-3B-Instruct-Q4_K_M.gguf"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +96,11 @@ class ExtractionConfig:
     WINDOW_OVERLAP: int = int(os.getenv("EXTRACTION_WINDOW_OVERLAP", "200"))
     # Cap windows so a 500-page manual can't spawn hundreds of LLM calls.
     MAX_WINDOWS: int = int(os.getenv("EXTRACTION_MAX_WINDOWS", "8"))
+    # Max tokens generated PER WINDOW. A window's entity JSON rarely needs more
+    # than ~1200 tokens; capping here stops the model (especially smaller ones)
+    # from rambling to the 2048 ceiling, which is the dominant scan-time cost.
+    # Truncated-JSON recovery salvages anything cut off, so lower is mostly free.
+    MAX_TOKENS: int = int(os.getenv("EXTRACTION_MAX_TOKENS", "1280"))
 
 
 # ---------------------------------------------------------------------------

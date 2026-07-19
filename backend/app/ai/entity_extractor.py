@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sys
 import traceback
@@ -10,9 +11,14 @@ from app.ai.llm import LLMWrapper
 from app.config import ExtractionConfig, ModelConfig
 class EntityExtractor:
     def __init__(self):
-        # Use the dedicated extraction model if one is configured; otherwise
-        # fall back to the main chat model (unchanged behavior).
+        # Use the dedicated (smaller, faster) extraction model when its file is
+        # present; otherwise transparently fall back to the main chat model, so
+        # a missing/incomplete download never breaks ingestion.
         extraction_path = ModelConfig.EXTRACTION_MODEL_PATH or None
+        if extraction_path and not os.path.exists(extraction_path):
+            print(f"[EntityExtractor] Extraction model not found at {extraction_path} "
+                  f"— using the main model for extraction.")
+            extraction_path = None
         if extraction_path:
             print(f"[EntityExtractor] Using dedicated extraction model: {extraction_path}")
         self.llm = LLMWrapper(model_path=extraction_path)
@@ -97,7 +103,7 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
                 raw_response = self.llm.generate(
                     prompt=f"TEXT TO ANALYZE:\n{window}",
                     system_prompt=self.system_prompt,
-                    max_tokens=2048,
+                    max_tokens=ExtractionConfig.MAX_TOKENS,
                 )
                 if not raw_response:
                     print(f"    Window {idx + 1}: empty LLM response — skipping.")
@@ -193,12 +199,20 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
         old_to_canon: Dict[str, str] = {}
         merged: Dict[str, Dict] = {}
 
+        dropped_types: Dict[str, int] = {}
         for ent in entities:
             name = (ent.get("name") or "").strip()
             norm = self._normalize_name(name)
             if not norm:
                 continue  # unusable entity — skip
             etype = self._normalize_type(ent.get("type"))
+            # Guardrail: keep only the known entity vocabulary. Smaller models
+            # occasionally invent types (e.g. "REPORT") that the prompt says to
+            # skip; dropping them keeps the graph consistent with the type
+            # palette instead of scattering Unknown-coloured noise nodes.
+            if etype not in self._KNOWN_TYPES:
+                dropped_types[etype] = dropped_types.get(etype, 0) + 1
+                continue
             canon_id = f"{etype.lower()}:{norm}".replace(" ", "_")
 
             old_id = ent.get("id")
@@ -215,13 +229,17 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
                 if len(desc) > len(merged[canon_id]["description"]):
                     merged[canon_id]["description"] = desc
 
+        if dropped_types:
+            print(f"  Dropped {sum(dropped_types.values())} entity(ies) with "
+                  f"out-of-vocabulary types: {dropped_types}")
+
         canon_rels = []
         seen_rels = set()
         for rel in relationships:
             src = old_to_canon.get(str(rel.get("source_id")))
             tgt = old_to_canon.get(str(rel.get("target_id")))
             if not src or not tgt or src == tgt:
-                continue  # dangling or self-loop — drop
+                continue  # dangling or self-loop — drop (incl. endpoints we just dropped)
             rtype = self._normalize_type(rel.get("type")) if rel.get("type") else "RELATES_TO"
             key = (src, tgt, rtype)
             if key in seen_rels:

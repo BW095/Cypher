@@ -1,0 +1,15 @@
+# Operations & Maintenance Manual: Centrifugal Pump P-101
+
+## 1. Equipment Overview
+The P-101 Centrifugal Pump is utilized for main cooling water circulation. 
+
+## 2. Operating Parameters
+- Normal Vibration: < 3.0 mm/s
+- Warning Threshold (ISO 10816): 4.5 mm/s
+- Critical/Trip Threshold: 6.0 mm/s
+
+## 3. Maintenance & Troubleshooting
+If vibration exceeds the ISO 10816 warning threshold of 4.5 mm/s, an immediate bearing inspection is required. 
+
+## 4. Safety & Compliance
+CRITICAL REGULATION: All inspections of P-101 must strictly adhere to OSHA 1910.147 Lockout/Tagout (LOTO) procedures. The power supply must be completely isolated and tagged before the pump casing or bearing housing is opened. Failure to apply LOTO is a severe compliance violation and poses a fatal risk.

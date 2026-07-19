@@ -60,6 +60,50 @@ class QueryEngine:
         self.graph_retriever = GraphRetriever(self.neo4j_db)
         self.context_builder = ContextBuilder()
 
+    def _referenced_sources(self, query: str) -> list[str]:
+        """Return paths of ingested documents whose filename appears in the
+        query, so a question like 'what does water pump flow.png show?' can be
+        answered from THAT file even when its content isn't a strong semantic
+        match for the question text."""
+        try:
+            paths = self.neo4j_db.get_all_document_paths()
+        except Exception:
+            return []
+        ql = query.lower()
+        hits = []
+        for p in paths:
+            base = os.path.basename(p)
+            if not base:
+                continue
+            stem = os.path.splitext(base)[0]
+            # Match the full filename, or the stem if it's distinctive enough.
+            if base.lower() in ql or (len(stem) >= 4 and stem.lower() in ql):
+                hits.append(p)
+        return hits
+
+    def _vector_retrieve(self, user_message: str) -> list[dict]:
+        """Vector retrieval, plus 'pinned' chunks from any file the user names
+        explicitly (so referenced documents are always in context)."""
+        chunks = self.vector_retriever.retrieve(user_message)
+
+        refs = self._referenced_sources(user_message)
+        if not refs:
+            return chunks
+
+        seen = {(c.get("source"), (c.get("text") or "")[:80]) for c in chunks}
+        pinned = []
+        for src in refs[:3]:  # cap in case a query name matches many files
+            for c in self.vector_retriever.retrieve(user_message, top_k=3, source_path=src):
+                key = (c.get("source"), (c.get("text") or "")[:80])
+                if key not in seen:
+                    seen.add(key)
+                    pinned.append(c)
+        if pinned:
+            print(f"[QueryEngine] Pinned {len(pinned)} chunk(s) from referenced "
+                  f"file(s): {[os.path.basename(s) for s in refs[:3]]}")
+            return pinned + chunks  # referenced-file content first
+        return chunks
+
     def query(self, user_message: str, chat_history: list[dict] | None = None) -> dict:
         """Process a user query through the full pipeline.
 
@@ -82,7 +126,7 @@ class QueryEngine:
         # 1. Vector retrieval — semantic search
         print("\n[QueryEngine] Step 1: Vector retrieval...")
         sys.stdout.flush()
-        vector_chunks = self.vector_retriever.retrieve(user_message)
+        vector_chunks = self._vector_retrieve(user_message)
 
         # 2. Graph retrieval — entity-based search
         print("\n[QueryEngine] Step 2: Graph retrieval...")
@@ -146,7 +190,7 @@ class QueryEngine:
         sys.stdout.flush()
 
         # 1-3. Retrieval + context (identical to query())
-        vector_chunks = self.vector_retriever.retrieve(user_message)
+        vector_chunks = self._vector_retrieve(user_message)
         graph_context = self.graph_retriever.retrieve(user_message)
         context = self.context_builder.build(vector_chunks, graph_context)
         messages = self._build_messages(user_message, context, chat_history)

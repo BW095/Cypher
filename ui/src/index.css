@@ -924,6 +924,31 @@ textarea {
   cursor: default;
 }
 
+/* Bordered secondary action button (auto-width text label). */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border-color: var(--accent);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .form-error {
   padding: 0 18px 14px;
   color: var(--err);

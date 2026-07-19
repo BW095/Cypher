@@ -242,11 +242,39 @@ class Neo4jStorage:
         cls._entity_name_cache_ts = now
         return names
 
+    # Cache of document paths, so file-aware retrieval can detect when a query
+    # names a specific document without hitting Neo4j on every message.
+    _doc_path_cache = None
+    _doc_path_cache_ts = 0.0
+
+    def get_all_document_paths(self) -> list[str]:
+        """Return every ingested Document's path, cached briefly."""
+        import time
+        now = time.time()
+        cls = type(self)
+        if cls._doc_path_cache is not None and \
+                now - cls._doc_path_cache_ts < cls._ENTITY_NAME_TTL:
+            return cls._doc_path_cache
+        try:
+            records, _, _ = self.driver.execute_query(
+                "MATCH (d:Document) RETURN d.path AS path",
+                database_=self.database,
+            )
+            paths = [r["path"] for r in records if r.get("path")]
+        except Exception as e:
+            logging.error(f"Error fetching document paths: {e}")
+            paths = cls._doc_path_cache or []
+        cls._doc_path_cache = paths
+        cls._doc_path_cache_ts = now
+        return paths
+
     def invalidate_entity_cache(self):
-        """Drop the entity-name cache (call after ingesting new documents)."""
+        """Drop the entity-name and document-path caches (call after ingest)."""
         cls = type(self)
         cls._entity_name_cache = None
         cls._entity_name_cache_ts = 0.0
+        cls._doc_path_cache = None
+        cls._doc_path_cache_ts = 0.0
 
     def search_entities(self, query_text: str, limit: int = 10) -> list[dict]:
         """Fuzzy search for entities whose name or description contains the query text."""

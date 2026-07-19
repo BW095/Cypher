@@ -132,12 +132,21 @@ export default function ChatView({ sessionId, onSessionCreated }) {
   const threadRef = useRef(null)
   const textareaRef = useRef(null)
   const abortRef = useRef(null)  // AbortController for the in-flight stream
+  const skipLoadRef = useRef(null)  // session id whose history-reload to skip (just created here)
 
   // Load history when switching sessions
   useEffect(() => {
     let cancelled = false
     if (!sessionId) {
       setMessages([])
+      return
+    }
+    // When the first message of a NEW chat creates a session, sessionId flips
+    // null -> id and fires this effect. The live (streaming) messages are
+    // already in state; reloading from the DB now would clobber the in-flight
+    // stream. Skip the reload exactly once for the session we just created.
+    if (sessionId === skipLoadRef.current) {
+      skipLoadRef.current = null
       return
     }
     api
@@ -207,7 +216,12 @@ export default function ChatView({ sessionId, onSessionCreated }) {
       await api.askStream(question, sessionId, {
         signal: controller.signal,
         onSession: (sid) => {
-          if (!sessionId && sid) onSessionCreated(sid)
+          if (!sessionId && sid) {
+            // Mark this session so the [sessionId] effect doesn't reload (and
+            // clobber) the stream when the parent sets it as active.
+            skipLoadRef.current = sid
+            onSessionCreated(sid)
+          }
         },
         onToken: (text) =>
           patchLast((last) => ({ ...last, content: last.content + text })),

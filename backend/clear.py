@@ -22,7 +22,10 @@ def purge_databases():
     except Exception as e:
         print(f"  ❌ Failed to clear SQLite: {e}")
 
-    # 2. Clear Qdrant Collection
+    # 2. Clear Qdrant Collection.
+    #    Delete then RECREATE it empty. Leaving it deleted made a running
+    #    backend fail every store_chunks (upsert to a missing collection),
+    #    so all ingestions came back FAILED until restart.
     try:
         qdrant_client = QdrantClient(host="localhost", port=6333)
         collection_name = "industrial_knowledge"
@@ -30,8 +33,11 @@ def purge_databases():
         if any(c.name == collection_name for c in collections):
             qdrant_client.delete_collection(collection_name=collection_name)
             print(f"  ✅ Qdrant collection '{collection_name}' deleted.")
-        else:
-            print("  ℹ️ Qdrant collection did not exist, skipping deletion.")
+        # Recreate an empty collection with the correct vector config so a live
+        # backend can keep ingesting immediately.
+        from app.storage.qdrant import QdrantStorage
+        QdrantStorage(collection_name=collection_name)
+        print(f"  ✅ Qdrant collection '{collection_name}' recreated empty.")
     except Exception as e:
         print(f"  ❌ Failed to clear Qdrant: {e}")
 
