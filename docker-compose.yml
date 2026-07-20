@@ -1,0 +1,85 @@
+name: cypher
+
+# Cypher — industrial AI brain. Four services: the vector DB (Qdrant), the graph
+# DB (Neo4j), the FastAPI backend (local GPU LLM), and the nginx-served React UI.
+#
+# Prerequisites on the host:
+#   - NVIDIA driver + nvidia-container-toolkit (for GPU passthrough to backend)
+#   - GGUF models placed in ./models (see .env.example / DEPLOY.md)
+#   - a .env file (copy from .env.example)
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # Uncomment to inspect Qdrant directly from the host:
+    # ports: ["6333:6333"]
+
+  neo4j:
+    image: neo4j:5
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-please-change-me}"
+      # The graph retriever uses APOC (apoc.path.subgraphAll).
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    # Uncomment for the Neo4j Browser at http://localhost:7474:
+    # ports: ["7474:7474", "7687:7687"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+      - neo4j
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      NEO4J_URI: "neo4j://neo4j:7687"
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-please-change-me}"
+      SQLITE_DB_PATH: /data/app.db
+      # Model paths inside the container (./models is mounted at /models).
+      QWEN_MODEL_PATH: /models/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+      CLIP_PROJECTOR_PATH: /models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
+      EXTRACTION_MODEL_PATH: /models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
+      # Cache downloaded embedding / reranker models on a volume.
+      HF_HOME: /hf-cache
+      CORS_ORIGINS: "http://localhost:${WEB_PORT:-8080}"
+    volumes:
+      - ./models:/models:ro
+      # Documents to ingest. Track subfolders of /documents in the UI.
+      - ${DOCUMENTS_DIR:-./documents}:/documents
+      - backend_data:/data
+      - hf_cache:/hf-cache
+    # GPU passthrough (needs nvidia-container-toolkit on the host).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Usually only the frontend is exposed; uncomment to hit the API directly:
+    # ports: ["8000:8000"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  backend_data:
+  hf_cache:

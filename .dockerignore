@@ -1,0 +1,34 @@
+# Keep the build context small & fast. Applies to both image builds (context .).
+
+# Huge / runtime-mounted data — never send to the Docker daemon.
+models/
+documents/
+demo_dataset/
+Industrial_Sample_Data/
+backend/data/
+logs/
+
+# Python caches / envs
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.venv/
+venv/
+env/
+
+# Node
+ui/node_modules/
+ui/dist/
+
+# VCS / editor / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+**/.DS_Store
+
+# Docs & local scratch that aren't needed in images
+*.md
+.env
+.env.*
+!.env.example

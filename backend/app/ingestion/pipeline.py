@@ -12,6 +12,10 @@ from app.storage.neo4j import Neo4jStorage  # Ensure this is imported
 from app.ai.entity_extractor import EntityExtractor
 
 
+# Hard ceiling on chunks per document (embedding is CPU-bound and serial).
+_MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "500"))
+
+
 def _hash_file(file_path: str) -> str:
     """Content hash used to skip re-ingesting unchanged files."""
     h = hashlib.sha256()
@@ -68,6 +72,15 @@ class IngestionPipeline:
 
             # 3. Chunk the text
             chunks = self.chunker.chunk_document(canonical_doc)
+
+            # Safety net: no single document should produce thousands of chunks
+            # (a huge table or dump would otherwise stall the whole queue on the
+            # CPU embed step). Processors like Excel summarize large data, but
+            # cap here too so any pathological file stays bounded.
+            if len(chunks) > _MAX_CHUNKS_PER_DOC:
+                print(f"  Capping {len(chunks)} chunks -> {_MAX_CHUNKS_PER_DOC} "
+                      f"for {file_path} (very large document).")
+                chunks = chunks[:_MAX_CHUNKS_PER_DOC]
 
             if chunks:
                 # 4. Generate Embeddings

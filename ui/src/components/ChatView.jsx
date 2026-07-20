@@ -106,7 +106,7 @@ function Message({ msg }) {
     <div className={`msg ${roleClass}`}>
       <div className="msg-meta">
         <span className="msg-author">{msg.role === 'user' ? 'You' : 'Cypher'}</span>
-        {isAssistant && !msg.streaming && <ConfidenceBadge confidence={msg.confidence} />}
+        {/* {isAssistant && !msg.streaming && <ConfidenceBadge confidence={msg.confidence} />} */}
       </div>
       <div className="msg-body">
         {waiting ? (

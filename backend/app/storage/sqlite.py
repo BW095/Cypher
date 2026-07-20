@@ -6,7 +6,9 @@ from datetime import datetime
 
 # Resolve the backend directory (two levels up from this file: storage/ -> app/ -> backend/)
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_DEFAULT_DB_PATH = os.path.join(_BACKEND_DIR, "data", "app.db")
+# Honor SQLITE_DB_PATH so deployments (e.g. Docker) can point the DB at a mounted
+# volume; falls back to backend/data/app.db for local runs.
+_DEFAULT_DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join(_BACKEND_DIR, "data", "app.db"))
 
 
 class SQLiteStorage:
