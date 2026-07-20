@@ -82,8 +82,12 @@ export default function KnowledgeView() {
   }
 
   const removeFolder = async (path) => {
+    if (!window.confirm(
+      `Remove "${path}" from tracking and delete all knowledge ingested from it?`
+    )) return
     try {
-      await api.removeFolder(path)
+      const res = await api.removeFolder(path)
+      flash('ok', `Removed folder and ${res.documents_removed ?? 0} document(s).`)
       refresh()
     } catch (err) {
       flash('error', err.message)
@@ -113,7 +117,7 @@ export default function KnowledgeView() {
           <div className="add-folder">
             <input
               value={folderInput}
-              placeholder={'Absolute path, e.g. C:\\Users\\Sounak\\Documents\\Reports'}
+              placeholder={'Absolute path, e.g. C:\\Users\\name\\Documents\\Reports'}
               onChange={(e) => setFolderInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addFolder()}
               spellCheck={false}

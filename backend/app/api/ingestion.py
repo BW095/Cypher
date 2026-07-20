@@ -23,6 +23,50 @@ def get_deps():
     return get_pipeline(), get_sqlite()
 
 
+def _start_watcher(folder: str, pipeline) -> bool:
+    """Start a background watcher for `folder` (idempotent). Returns True if a
+    new watcher was started, False if one was already running."""
+    from app.ingestion.watcher import DirectoryWatcher
+
+    with _watcher_lock:
+        if folder in _active_watchers:
+            return False
+
+    watcher = DirectoryWatcher(directory_to_watch=folder, pipeline=pipeline)
+
+    def _run_watcher():
+        try:
+            watcher.start()
+        except Exception as e:
+            print(f"[Ingestion] Watcher for {folder} crashed: {e}")
+
+    with _watcher_lock:
+        _active_watchers[folder] = watcher
+    threading.Thread(target=_run_watcher, daemon=True, name=f"watcher-{folder}").start()
+    return True
+
+
+def start_tracked_watchers():
+    """Re-start watchers for every active tracked folder. Called on app startup
+    so a restart doesn't leave folders showing 'watching' with no live watcher
+    (which also broke stop/remove)."""
+    pipeline, db = get_deps()
+    if pipeline is None or db is None:
+        return
+    for f in db.list_folders():
+        if not f.get("is_active", 1):
+            continue
+        folder = os.path.abspath(f["path"])
+        if not os.path.isdir(folder):
+            print(f"[Ingestion] Tracked folder no longer exists, skipping: {folder}")
+            continue
+        try:
+            _start_watcher(folder, pipeline)
+            print(f"[Ingestion] Resumed watcher for {folder}")
+        except Exception as e:
+            print(f"[Ingestion] Could not resume watcher for {folder}: {e}")
+
+
 # -------------------------------------------------------------------------
 # POST /api/ingest/start — start tracking a folder
 # -------------------------------------------------------------------------
@@ -40,55 +84,65 @@ async def start_ingestion(req: IngestRequest):
         if folder in _active_watchers:
             return {"status": "already_running", "folder": folder}
 
-    # Register in SQLite
+    # Register in SQLite and start the watcher.
     db.add_folder(folder)
-
-    # Start watcher in a background thread
-    from app.ingestion.watcher import DirectoryWatcher
-
-    watcher = DirectoryWatcher(directory_to_watch=folder, pipeline=pipeline)
-
-    def _run_watcher():
-        try:
-            watcher.start()
-        except Exception as e:
-            print(f"[Ingestion] Watcher for {folder} crashed: {e}")
-
-    thread = threading.Thread(target=_run_watcher, daemon=True, name=f"watcher-{folder}")
-
-    with _watcher_lock:
-        _active_watchers[folder] = watcher
-
-    thread.start()
+    _start_watcher(folder, pipeline)
 
     return {"status": "started", "folder": folder}
 
 
+def _stop_watcher(folder: str):
+    """Stop and drop a folder's watcher if one is running (no-op otherwise)."""
+    with _watcher_lock:
+        watcher = _active_watchers.pop(folder, None)
+    if watcher is not None:
+        try:
+            watcher.stop()
+        except Exception:
+            pass
+
+
 # -------------------------------------------------------------------------
-# POST /api/ingest/stop — stop watching a folder
+# POST /api/ingest/stop — pause watching a folder (keeps ingested data)
 # -------------------------------------------------------------------------
 @router.post("/stop")
 async def stop_ingestion(req: IngestStopRequest):
-    """Stop watching a folder (does not delete ingested data)."""
-    _, db = get_deps()
+    """Stop watching a folder but keep its ingested data.
 
+    Graceful: if no live watcher exists (e.g. after a server restart), the
+    folder is still marked inactive instead of erroring.
+    """
+    _, db = get_deps()
+    folder = os.path.abspath(req.folder_path)
+    _stop_watcher(folder)
+    db.deactivate_folder(folder)
+    return {"status": "stopped", "folder": folder}
+
+
+# -------------------------------------------------------------------------
+# POST /api/ingest/remove — untrack a folder AND delete its ingested knowledge
+# -------------------------------------------------------------------------
+@router.post("/remove")
+async def remove_folder(req: IngestStopRequest):
+    """Fully remove a tracked folder: stop its watcher, purge every document it
+    ingested (vectors + graph + tracking rows), and drop it from the list.
+
+    Works whether or not a live watcher exists (restart-safe)."""
+    pipeline, db = get_deps()
     folder = os.path.abspath(req.folder_path)
 
-    with _watcher_lock:
-        watcher = _active_watchers.pop(folder, None)
+    _stop_watcher(folder)
 
-    if watcher is None:
-        raise HTTPException(status_code=404, detail=f"No active watcher for: {folder}")
+    removed = 0
+    if pipeline is not None:
+        try:
+            removed = pipeline.delete_folder(folder)
+        except Exception as e:
+            print(f"[Ingestion] Error purging documents for {folder}: {e}")
 
-    # Stop the watch loop, its observer, and its ingestion queue worker.
-    try:
-        watcher.stop()
-    except Exception:
-        pass
+    db.remove_folder(folder)
 
-    db.deactivate_folder(folder)
-
-    return {"status": "stopped", "folder": folder}
+    return {"status": "removed", "folder": folder, "documents_removed": removed}
 
 
 # -------------------------------------------------------------------------

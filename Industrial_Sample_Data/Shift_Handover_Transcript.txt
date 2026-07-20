@@ -1,5 +1,0 @@
-Date: August 14, 2023
-Shift: Night Shift (22:00 - 06:00)
-Operator: John Davis
-
-"Just recording the handover notes for the morning crew. Around 3 AM, the SCADA system threw an alert for Pump P-101. It was making a loud grinding noise and the casing was running really hot. We had to keep production moving, so we didn't have time to do the full OSHA lockout/tagout procedure. I just quickly popped the bearing inspection hatch while it was winding down to take a look. Looks like the inboard bearing is totally shot. We left it offline for the morning crew to fix. Again, skipped LOTO to save time, but it's offline now."

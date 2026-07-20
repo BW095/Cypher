@@ -131,6 +131,15 @@ async def lifespan(app: FastAPI):
         _pipeline.embedding_model = _embedding_model
     logger.info("  ✅ Ingestion pipeline initialized")
 
+    # Resume watchers for previously-tracked folders, so a restart doesn't leave
+    # them showing "watching" with no live watcher (and picks up offline edits).
+    try:
+        from app.api.ingestion import start_tracked_watchers
+        start_tracked_watchers()
+        logger.info("  ✅ Resumed folder watchers")
+    except Exception as e:
+        logger.warning(f"  ⚠️ Could not resume folder watchers: {e}")
+
     logger.info("🧠 Cypher AI Brain is ready!")
 
     yield  # Application is running

@@ -87,7 +87,10 @@ export const api = {
   status: () => fetch('/api/ingest/status').then(handle),
   folders: () => fetch('/api/ingest/folders').then(handle),
   addFolder: (folderPath) => post('/api/ingest/start', { folder_path: folderPath }),
-  removeFolder: (folderPath) => post('/api/ingest/stop', { folder_path: folderPath }),
+  // Fully remove a tracked folder AND delete its ingested knowledge.
+  removeFolder: (folderPath) => post('/api/ingest/remove', { folder_path: folderPath }),
+  // Pause watching but keep the ingested data.
+  stopFolder: (folderPath) => post('/api/ingest/stop', { folder_path: folderPath }),
 
   // Documents
   documents: () => fetch('/api/documents').then(handle),

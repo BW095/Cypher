@@ -111,6 +111,31 @@ class IngestionPipeline:
             print(f"Ingestion failed for {file_path}. Error: {str(e)}")
             traceback.print_exc()
 
+    def delete_folder(self, folder_path: str) -> int:
+        """Purge every ingested document under a folder from all stores.
+
+        Used when a tracked folder is removed — deletes each file's vectors,
+        graph nodes/links and tracking row. Returns how many documents were
+        removed.
+        """
+        folder = os.path.abspath(folder_path)
+        prefix = folder.rstrip("/\\") + os.sep
+        try:
+            docs = [
+                d["file_path"] for d in self.tracker.get_all_documents()
+                if d.get("file_path")
+                and (d["file_path"] == folder or d["file_path"].startswith(prefix))
+            ]
+        except Exception as e:
+            print(f"  Could not list documents for {folder}: {e}")
+            return 0
+
+        for fp in docs:
+            self.delete_file(fp)
+        print(f"Removed {len(docs)} document(s) under folder: {folder}")
+        sys.stdout.flush()
+        return len(docs)
+
     def delete_file(self, file_path: str):
         """Remove a file's data from every store after it's deleted from disk.
 
