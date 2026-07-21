@@ -40,7 +40,7 @@ RUN pip install -r requirements.txt
 # 3) llama-cpp-python — the JamePeng fork (Qwen3VL vision handler), built with
 #    CUDA. CMAKE arch 89 = Ada (RTX 40-series); change for a different GPU
 #    (e.g. 86 for Ampere/RTX 30, 75 for Turing/T4), or drop it to build for all.
-ENV CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=89"
+ENV CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75;86;89"
 RUN pip install "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@1762647fe473a8cfc25447b53b32316f2ca3c391"
 
 # 4) Application code (models & data are mounted at runtime, not baked in).

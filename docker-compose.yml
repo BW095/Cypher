@@ -50,7 +50,7 @@ services:
       EXTRACTION_MODEL_PATH: /models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
       # Cache downloaded embedding / reranker models on a volume.
       HF_HOME: /hf-cache
-      CORS_ORIGINS: "http://localhost:${WEB_PORT:-8080}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
     volumes:
       - ./models:/models:ro
       # Documents to ingest. Track subfolders of /documents in the UI.
