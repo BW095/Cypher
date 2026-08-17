@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { api, baseName } from '../api'
-import { LogoMark, IconSend, IconStop, IconChevron, IconFile, IconExternal, IconQuote } from '../icons'
+import {
+  LogoMark, IconSend, IconStop, IconChevron, IconFile,
+  IconExternal, IconQuote, IconUpload, IconCheckCircle, IconAlertCircle, IconX,
+} from '../icons'
 
 const SUGGESTIONS = [
   'Summarize the latest maintenance reports',
@@ -11,6 +14,21 @@ const SUGGESTIONS = [
 ]
 
 const CONF_CLASS = { High: 'ok', Medium: 'warn', Low: 'err' }
+
+// ─── Supported extensions (mirrors backend Dispatcher) ────────────────────
+const SUPPORTED_EXTS = new Set([
+  'pdf','png','jpg','jpeg','tiff','bmp',
+  'mp4','mkv','avi','mov',
+  'mp3','wav','m4a','flac',
+  'xlsx','xls','csv',
+  'docx','doc','pptx','ppt','odt','html','txt',
+  'eml','msg','zip',
+])
+
+function extOf(name) { return (name.split('.').pop() || '').toLowerCase() }
+function isSupported(f) { return SUPPORTED_EXTS.has(extOf(f.name)) }
+
+// ─── Sub-components ────────────────────────────────────────────────────────
 
 function ConfidenceBadge({ confidence }) {
   if (!confidence || !confidence.label) return null
@@ -58,7 +76,6 @@ function Sources({ sources }) {
   const [open, setOpen] = useState(false)
   if (!sources || sources.length === 0) return null
 
-  // Sources the model actually cited come first and drive the summary label.
   const cited = sources.filter((s) => s.cited)
   const others = sources.filter((s) => !s.cited)
   const ordered = [...cited, ...others]
@@ -90,9 +107,7 @@ function Sources({ sources }) {
 function TypingDots() {
   return (
     <div className="typing">
-      <span />
-      <span />
-      <span />
+      <span /><span /><span />
     </div>
   )
 }
@@ -100,13 +115,11 @@ function TypingDots() {
 function Message({ msg }) {
   const roleClass = msg.error ? 'assistant error' : msg.role
   const isAssistant = msg.role === 'assistant' && !msg.error
-  // A streaming assistant bubble with no text yet shows the typing indicator.
   const waiting = isAssistant && msg.streaming && !msg.content
   return (
     <div className={`msg ${roleClass}`}>
       <div className="msg-meta">
         <span className="msg-author">{msg.role === 'user' ? 'You' : 'Cypher'}</span>
-        {/* {isAssistant && !msg.streaming && <ConfidenceBadge confidence={msg.confidence} />} */}
       </div>
       <div className="msg-body">
         {waiting ? (
@@ -125,52 +138,75 @@ function Message({ msg }) {
   )
 }
 
-export default function ChatView({ sessionId, onSessionCreated }) {
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const threadRef = useRef(null)
-  const textareaRef = useRef(null)
-  const abortRef = useRef(null)  // AbortController for the in-flight stream
-  const skipLoadRef = useRef(null)  // session id whose history-reload to skip (just created here)
+// ─── Upload status pill ────────────────────────────────────────────────────
 
-  // Load history when switching sessions
+function UploadPill({ item, onRemove }) {
+  const done  = item.status === 'queued' || item.status === 'zip_extracted'
+  const fail  = item.status === 'failed' || item.status === 'rejected'
+  const busy  = item.status === 'uploading'
+
+  return (
+    <div className={`upload-pill ${done ? 'done' : fail ? 'fail' : 'busy'}`}>
+      {busy ? (
+        <span className="upload-spinner" />
+      ) : done ? (
+        <IconCheckCircle size={13} />
+      ) : (
+        <IconAlertCircle size={13} />
+      )}
+      <span className="upload-pill-name" title={item.file}>{item.file}</span>
+      {!busy && (
+        <button className="upload-pill-remove" onClick={() => onRemove(item.file)} title="Dismiss">
+          <IconX size={11} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ─── Drop zone overlay ─────────────────────────────────────────────────────
+
+function DropOverlay() {
+  return (
+    <div className="drop-overlay">
+      <IconUpload size={38} />
+      <span>Drop files to upload & ingest</span>
+    </div>
+  )
+}
+
+// ─── Main ChatView ─────────────────────────────────────────────────────────
+
+export default function ChatView({ sessionId, onSessionCreated }) {
+  const [messages, setMessages]     = useState([])
+  const [input, setInput]           = useState('')
+  const [busy, setBusy]             = useState(false)
+  const [dragOver, setDragOver]     = useState(false)
+  const [uploadItems, setUploadItems] = useState([])   // {file, status, error?}
+  const [uploading, setUploading]   = useState(false)
+
+  const threadRef   = useRef(null)
+  const textareaRef = useRef(null)
+  const abortRef    = useRef(null)
+  const skipLoadRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const dragCounter = useRef(0)   // track nested drag-enter/leave
+
+  // ── Session history load ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
-    if (!sessionId) {
-      setMessages([])
-      return
-    }
-    // When the first message of a NEW chat creates a session, sessionId flips
-    // null -> id and fires this effect. The live (streaming) messages are
-    // already in state; reloading from the DB now would clobber the in-flight
-    // stream. Skip the reload exactly once for the session we just created.
-    if (sessionId === skipLoadRef.current) {
-      skipLoadRef.current = null
-      return
-    }
-    api
-      .sessionHistory(sessionId)
+    if (!sessionId) { setMessages([]); return }
+    if (sessionId === skipLoadRef.current) { skipLoadRef.current = null; return }
+    api.sessionHistory(sessionId)
       .then((data) => {
-        if (!cancelled) {
-          setMessages(
-            data.messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-              sources: m.sources,
-            }))
-          )
-        }
+        if (!cancelled)
+          setMessages(data.messages.map((m) => ({ role: m.role, content: m.content, sources: m.sources })))
       })
-      .catch(() => {
-        if (!cancelled) setMessages([])
-      })
-    return () => {
-      cancelled = true
-    }
+      .catch(() => { if (!cancelled) setMessages([]) })
+    return () => { cancelled = true }
   }, [sessionId])
 
-  // Keep the thread pinned to the bottom
+  // ── Auto-scroll ──────────────────────────────────────────────────────────
   useEffect(() => {
     const el = threadRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -183,13 +219,13 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`
   }
 
+  // ── Chat send ────────────────────────────────────────────────────────────
   const send = async (text) => {
     const question = (text ?? input).trim()
     if (!question || busy) return
 
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    // Append the user turn plus an empty, streaming assistant bubble.
     setMessages((prev) => [
       ...prev,
       { role: 'user', content: question },
@@ -197,15 +233,12 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     ])
     setBusy(true)
 
-    // Helper: update the last message (the streaming assistant bubble) in place.
     const patchLast = (patch) =>
       setMessages((prev) => {
         const next = [...prev]
         const last = next[next.length - 1]
-        if (last && last.role === 'assistant') {
-          next[next.length - 1] =
-            typeof patch === 'function' ? patch(last) : { ...last, ...patch }
-        }
+        if (last && last.role === 'assistant')
+          next[next.length - 1] = typeof patch === 'function' ? patch(last) : { ...last, ...patch }
         return next
       })
 
@@ -216,39 +249,19 @@ export default function ChatView({ sessionId, onSessionCreated }) {
       await api.askStream(question, sessionId, {
         signal: controller.signal,
         onSession: (sid) => {
-          if (!sessionId && sid) {
-            // Mark this session so the [sessionId] effect doesn't reload (and
-            // clobber) the stream when the parent sets it as active.
-            skipLoadRef.current = sid
-            onSessionCreated(sid)
-          }
+          if (!sessionId && sid) { skipLoadRef.current = sid; onSessionCreated(sid) }
         },
-        onToken: (text) =>
-          patchLast((last) => ({ ...last, content: last.content + text })),
-        onDone: (ev) =>
-          patchLast({
-            content: ev.answer,
-            sources: ev.sources,
-            confidence: ev.confidence,
-            streaming: false,
-          }),
+        onToken: (text) => patchLast((last) => ({ ...last, content: last.content + text })),
+        onDone: (ev) => patchLast({ content: ev.answer, sources: ev.sources, confidence: ev.confidence, streaming: false }),
       })
     } catch (err) {
       if (err.name === 'AbortError') {
-        // User pressed Stop — keep whatever streamed so far, mark a note.
         patchLast((last) => ({
-          ...last,
-          streaming: false,
-          content: last.content
-            ? `${last.content}\n\n_(stopped)_`
-            : '_(stopped before any output)_',
+          ...last, streaming: false,
+          content: last.content ? `${last.content}\n\n_(stopped)_` : '_(stopped before any output)_',
         }))
       } else {
-        patchLast({
-          error: true,
-          streaming: false,
-          content: `Request failed: ${err.message}`,
-        })
+        patchLast({ error: true, streaming: false, content: `Request failed: ${err.message}` })
       }
     } finally {
       abortRef.current = null
@@ -259,16 +272,88 @@ export default function ChatView({ sessionId, onSessionCreated }) {
   const stop = () => abortRef.current?.abort()
 
   const onKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      send()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
+
+  // ── File upload logic ────────────────────────────────────────────────────
+  const uploadFiles = useCallback(async (files) => {
+    const fileArr = Array.from(files)
+    const supported = fileArr.filter(isSupported)
+    const rejected  = fileArr.filter((f) => !isSupported(f))
+
+    // Add pending pills immediately
+    const pending = supported.map((f) => ({ file: f.name, status: 'uploading' }))
+    const rejectedItems = rejected.map((f) => ({
+      file: f.name, status: 'rejected', error: `Unsupported type (.${extOf(f.name)})`,
+    }))
+    setUploadItems((prev) => [...prev, ...pending, ...rejectedItems])
+
+    if (!supported.length) return
+
+    setUploading(true)
+    try {
+      const result = await api.uploadFiles(supported)
+      // Replace the 'uploading' pills with real statuses from server
+      setUploadItems((prev) => {
+        const resultMap = {}
+        for (const r of result.results) resultMap[r.file] = r
+        return prev.map((item) =>
+          item.status === 'uploading' && resultMap[item.file]
+            ? { ...item, ...resultMap[item.file] }
+            : item
+        )
+      })
+    } catch (err) {
+      setUploadItems((prev) =>
+        prev.map((item) =>
+          item.status === 'uploading' ? { ...item, status: 'failed', error: err.message } : item
+        )
+      )
+    } finally {
+      setUploading(false)
+    }
+  }, [])
+
+  // ── Drag-and-drop handlers ───────────────────────────────────────────────
+  const onDragEnter = (e) => {
+    e.preventDefault()
+    dragCounter.current++
+    if (e.dataTransfer.types.includes('Files')) setDragOver(true)
+  }
+  const onDragLeave = (e) => {
+    e.preventDefault()
+    dragCounter.current--
+    if (dragCounter.current === 0) setDragOver(false)
+  }
+  const onDragOver = (e) => { e.preventDefault() }
+  const onDrop = (e) => {
+    e.preventDefault()
+    dragCounter.current = 0
+    setDragOver(false)
+    const files = e.dataTransfer.files
+    if (files.length) uploadFiles(files)
+  }
+
+  const onFileInputChange = (e) => {
+    if (e.target.files?.length) uploadFiles(e.target.files)
+    e.target.value = ''   // reset so same file can be re-uploaded
+  }
+
+  const removeUploadPill = (fileName) =>
+    setUploadItems((prev) => prev.filter((i) => i.file !== fileName))
 
   const empty = messages.length === 0 && !busy
 
   return (
-    <div className="chat">
+    <div
+      className="chat"
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      {dragOver && <DropOverlay />}
+
       {empty ? (
         <div className="hero">
           <LogoMark size={54} />
@@ -286,37 +371,69 @@ export default function ChatView({ sessionId, onSessionCreated }) {
               </button>
             ))}
           </div>
+          {/* Hero upload zone */}
+          <button
+            className="hero-upload-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload documents to ingest"
+          >
+            <IconUpload size={16} />
+            Upload documents
+          </button>
         </div>
       ) : (
         <div className="thread" ref={threadRef}>
           <div className="thread-inner">
-            {messages.map((m, i) => (
-              <Message key={i} msg={m} />
-            ))}
+            {messages.map((m, i) => <Message key={i} msg={m} />)}
           </div>
+        </div>
+      )}
+
+      {/* Upload result pills */}
+      {uploadItems.length > 0 && (
+        <div className="upload-pills-row">
+          {uploadItems.map((item) => (
+            <UploadPill key={item.file} item={item} onRemove={removeUploadPill} />
+          ))}
+          {!uploading && (
+            <button
+              className="upload-pills-clear"
+              onClick={() => setUploadItems([])}
+              title="Clear all"
+            >
+              Clear
+            </button>
+          )}
         </div>
       )}
 
       <div className="composer-wrap">
         <div className="composer">
+          {/* Upload button inside composer */}
+          <button
+            className="upload-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload files to ingest"
+            disabled={uploading}
+          >
+            {uploading
+              ? <span className="upload-spinner" />
+              : <IconUpload size={16} />
+            }
+          </button>
+
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
-            placeholder="Ask about your documents, equipment, procedures..."
-            onChange={(e) => {
-              setInput(e.target.value)
-              autosize()
-            }}
+            placeholder="Ask about your documents, or drag & drop files to upload..."
+            onChange={(e) => { setInput(e.target.value); autosize() }}
             onKeyDown={onKeyDown}
             disabled={busy}
           />
+
           {busy ? (
-            <button
-              className="send-btn stop-btn"
-              onClick={stop}
-              title="Stop generating"
-            >
+            <button className="send-btn stop-btn" onClick={stop} title="Stop generating">
               <IconStop size={16} />
             </button>
           ) : (
@@ -331,9 +448,19 @@ export default function ChatView({ sessionId, onSessionCreated }) {
           )}
         </div>
         <div className="composer-hint">
-          Enter to send · Shift+Enter for a new line · Answers cite tracked documents
+          Enter to send · Shift+Enter for new line · Drag &amp; drop files to upload and ingest
         </div>
       </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept={[...SUPPORTED_EXTS].map((e) => `.${e}`).join(',')}
+        style={{ display: 'none' }}
+        onChange={onFileInputChange}
+      />
     </div>
   )
 }

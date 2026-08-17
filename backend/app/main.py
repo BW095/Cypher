@@ -198,6 +198,7 @@ from app.api.documents import router as documents_router
 from app.api.graph import router as graph_router
 from app.api.compliance import router as compliance_router
 from app.api.extract import router as extract_router
+from app.api.upload import router as upload_router
 
 app.include_router(chat_router)
 app.include_router(ingestion_router)
@@ -205,6 +206,7 @@ app.include_router(documents_router)
 app.include_router(graph_router)
 app.include_router(compliance_router)
 app.include_router(extract_router)
+app.include_router(upload_router)
 
 
 # ---------------------------------------------------------------------------

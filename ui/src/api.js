@@ -107,6 +107,31 @@ export const api = {
   // Compliance
   complianceGaps: (analyze = false) =>
     fetch(`/api/compliance/gaps?analyze=${analyze}`).then(handle),
+
+  // Direct file upload — accepts a FileList or File[].
+  // Returns { total_files, queued, failed, results: [...] }
+  async uploadFiles(files) {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    const res = await fetch('/api/upload', { method: 'POST', body: form })
+    return handle(res)
+  },
+
+  // Structured extraction
+  extractFields: (path) =>
+    fetch(`/api/extract?path=${encodeURIComponent(path)}`).then(handle),
+  extractBatch: (params = {}) => {
+    const q = new URLSearchParams()
+    if (params.domain) q.set('domain', params.domain)
+    if (params.category) q.set('category', params.category)
+    return fetch(`/api/extract/batch?${q}`).then(handle)
+  },
+  exportUrl: (format = 'excel', params = {}) => {
+    const q = new URLSearchParams({ format })
+    if (params.domain) q.set('domain', params.domain)
+    if (params.category) q.set('category', params.category)
+    return `/api/extract/export?${q}`
+  },
 }
 
 // Stable color per entity type — used across the graph visualization.
