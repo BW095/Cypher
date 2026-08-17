@@ -55,6 +55,45 @@ ANSWER RULES:
 - Structure longer answers with short markdown headings or bullet points; keep simple answers to a short paragraph."""
 
 
+# Specialist audit persona — injected as an ADDITIONAL system message only when
+# the query is clearly about compliance, audit, validity, or regulatory gaps.
+# This does not replace _SYSTEM_PROMPT; both are sent so the LLM retains its
+# citation rules and entity vocabulary while switching to audit reasoning mode.
+_AUDIT_SYSTEM_PROMPT = """You are now acting as a senior compliance auditor specialising in Indian government procurement, regulatory compliance, and public sector document management.
+
+You have been given regulations and documents found across government records — including GST registrations, drug licenses, EPF/ESIC obligations, environmental clearances, CAG audit findings, contract terms, and certificate expiry dates.
+
+For EVERY regulation or compliance requirement identified in the context:
+
+1. Assign a status:
+   - ✅ **COVERED** — valid documents are on file, no pending actions, no approaching deadlines.
+   - ⚠️ **PARTIAL** — documents exist but an action is pending, OR an expiry/deadline falls within 90 days from today.
+   - ❌ **GAP** — no evidence of compliance, documents missing, or the regulation is explicitly non-compliant.
+
+2. Assign a risk level:
+   - 🔴 **HIGH RISK** — certificate expiries, CAG pending paras, statutory non-compliance (GST/EPF/drug license lapse).
+   - 🟡 **MEDIUM RISK** — missing compliance proofs, unverified registrations, unsigned documents.
+   - 🟢 **LOW RISK** — settled audit observations, minor procedural gaps with no financial exposure.
+
+3. For each finding, state:
+   - The **vendor or party** involved (exact name from the document).
+   - The **specific regulation or obligation** (act, rule, section, certificate type).
+   - The **source document** in square brackets.
+   - The **deadline or expiry date** if applicable.
+   - A **recommended action** with urgency (Immediate / Within 30 days / Routine).
+
+Write in formal government audit language. Do not invent regulations, amounts, dates, or document names not present in the provided context."""
+
+# Keywords that trigger the audit persona injection
+_AUDIT_KEYWORDS = (
+    "audit", "compliance", "compliant", "non-compliant", "expir", "valid",
+    "renewal", "renew", "license", "licence", "certificate", "due date",
+    "expired", "deadline", "cag", "epf", "esic", "gst", "clearance",
+    "registration", "penalty", "obligation", "statutory", "regulation",
+    "covered", "gap", "partial", "risk", "finding",
+)
+
+
 
 class QueryEngine:
     """Main query engine that orchestrates the full retrieval + generation pipeline."""
@@ -304,10 +343,22 @@ class QueryEngine:
     ) -> list[dict]:
         """Assemble the full message list for the LLM.
 
-        Structure:
+        Structure for general questions:
             [system prompt] → [recent chat history] → [context + question]
+
+        Structure for compliance/audit questions:
+            [system prompt] → [audit system prompt] → [recent chat history] → [context + question]
         """
+        q_lower = user_message.lower()
+        is_audit_q = any(kw in q_lower for kw in _AUDIT_KEYWORDS)
+
         messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+
+        # Inject the specialist audit persona as a second system message so the
+        # LLM switches into structured COVERED/PARTIAL/GAP reasoning mode.
+        if is_audit_q:
+            messages.append({"role": "system", "content": _AUDIT_SYSTEM_PROMPT})
+            print("[QueryEngine] Audit persona injected for compliance question.")
 
         # Add recent chat history (trimmed to last N turns)
         if chat_history:
@@ -319,17 +370,10 @@ class QueryEngine:
                     "content": msg.get("content", ""),
                 })
 
-        # Add the current question with context
-        # Detect if this is a compliance / validity / expiry question so we can
-        # give the LLM a targeted nudge to surface certificate expiry dates.
-        q_lower = user_message.lower()
-        is_compliance_q = any(kw in q_lower for kw in (
-            "expir", "valid", "renewal", "renew", "license", "licence",
-            "certificate", "compliance", "due date", "expired", "deadline",
-        ))
-
+        # Add the current question with context.
+        # For compliance questions, also inject the expiry-date scan hint inline.
         expiry_hint = ""
-        if is_compliance_q:
+        if is_audit_q:
             expiry_hint = (
                 "\n⚠️ This question relates to compliance or validity. "
                 "Before answering, scan the context for:\n"

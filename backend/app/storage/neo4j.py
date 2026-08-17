@@ -594,9 +594,16 @@ class Neo4jStorage:
         MENTIONS against other Document nodes in the graph and create a
         (source:Document)-[:REFERENCES {ref_id}]->(target:Document) edge.
 
-        The matching is done on basename similarity so it works regardless of
-        full path differences. Returns how many links were created.
+        Matching uses three passes (fastest-first):
+          1. Exact basename-stem match (ref_id stem == doc stem).
+          2. Substring — ref_id (lowercased) appears inside doc basename.
+          3. Token overlap — significant tokens from the ref_id appear in the
+             doc basename (handles PO-MoF-2024-IT-0089 style IDs).
+
+        Returns how many new links were created.
         """
+        import os
+        import re as _re
         created = 0
         try:
             # Fetch all DOC_REFERENCE entities mentioned by this document.
@@ -612,35 +619,60 @@ class Neo4jStorage:
 
             # Fetch all Document paths for matching.
             doc_records, _, _ = self.driver.execute_query(
-                "MATCH (d:Document) RETURN d.path AS path, d.doc_category AS category",
+                "MATCH (d:Document) RETURN d.path AS path",
                 database_=self.database,
             )
-            # Build a lookup: basename (lower, no ext) → full path
-            import os
-            def _doc_key(p):
+
+            def _stem(p):
                 return os.path.splitext(os.path.basename(p or "").lower())[0]
-            doc_map = {_doc_key(r["path"]): r["path"]
+
+            # Build lookup: stem -> path (excluding self)
+            doc_map = {_stem(r["path"]): r["path"]
                        for r in doc_records if r.get("path") and r["path"] != file_path}
+
+            def _sig_tokens(s):
+                """Return significant tokens (len>=3, not pure digits) from a ref ID."""
+                parts = _re.split(r'[-_\s/]+', s.lower())
+                return [p for p in parts if len(p) >= 3 and not p.isdigit()]
 
             for ref in ref_records:
                 ref_id = (ref.get("ref_id") or "").strip()
-                if not ref_id:
+                if not ref_id or len(ref_id) < 3:
                     continue
-                # Try to match: does any document basename contain the ref_id token?
-                ref_key = _doc_key(ref_id)
+
+                ref_stem = _stem(ref_id)
+                ref_lower = ref_id.lower()
+                ref_tokens = _sig_tokens(ref_id)
                 matched_path = None
-                for doc_key, doc_path in doc_map.items():
-                    if ref_key and (ref_key in doc_key or doc_key in ref_key):
+
+                for doc_stem, doc_path in doc_map.items():
+                    # Pass 1: exact stem match
+                    if ref_stem and ref_stem == doc_stem:
                         matched_path = doc_path
                         break
-                    # Also try substring of the ref_id itself inside the path basename
-                    ref_lower = ref_id.lower()
-                    if len(ref_lower) >= 3 and ref_lower in doc_key:
+                    # Pass 2: ref_id substring inside doc stem, or vice versa
+                    if ref_stem and (ref_stem in doc_stem or doc_stem in ref_stem):
+                        matched_path = doc_path
+                        break
+                    if len(ref_lower) >= 4 and ref_lower in doc_stem:
                         matched_path = doc_path
                         break
 
+                if not matched_path and ref_tokens:
+                    # Pass 3: token overlap — at least 2 significant tokens match
+                    # (or 1 if ref has only 1 significant token)
+                    threshold = min(2, len(ref_tokens))
+                    best_score = 0
+                    best_path = None
+                    for doc_stem, doc_path in doc_map.items():
+                        score = sum(1 for tok in ref_tokens if tok in doc_stem)
+                        if score >= threshold and score > best_score:
+                            best_score = score
+                            best_path = doc_path
+                    matched_path = best_path
+
                 if not matched_path:
-                    continue  # no matching document found yet
+                    continue
 
                 # Create the Document→Document REFERENCES edge.
                 try:
@@ -665,6 +697,7 @@ class Neo4jStorage:
         except Exception as e:
             logging.error(f"[Entanglement] link_document_references failed for {file_path}: {e}")
         return created
+
 
     def get_entanglement_graph(self) -> dict:
         """Return the full document-level dependency graph.

@@ -13,6 +13,11 @@ POST /api/entanglement/risk
 
 POST /api/entanglement/status
     Set a document's status (active / revoked / expired / cancelled / suspended).
+
+POST /api/entanglement/relink-all
+    Re-run DOC_REFERENCE → Document matching for every ingested document.
+    Creates [:REFERENCES] edges without needing a full re-ingest.
+    Use this after updating the entity extractor or importing new documents.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -93,3 +98,41 @@ def update_status(req: StatusRequest):
     if not ok:
         raise HTTPException(status_code=400, detail="Could not update document status.")
     return {"path": req.path, "status": req.status, "updated": True}
+
+
+@router.post("/relink-all")
+def relink_all():
+    """Re-run DOC_REFERENCE -> Document matching for every ingested document.
+
+    Creates [:REFERENCES] edges from DOC_REFERENCE entities already in the graph
+    without needing a full re-ingest. Call this after updating the entity
+    extractor prompts, importing new documents, or on first deploy.
+
+    Returns total links created and a per-document breakdown.
+    """
+    db = _get_neo4j()
+    try:
+        records, _, _ = db.driver.execute_query(
+            "MATCH (d:Document) RETURN d.path AS path",
+            database_=db.database,
+        )
+        paths = [r["path"] for r in records if r.get("path")]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list documents: {e}")
+
+    total = 0
+    details = []
+    for path in paths:
+        try:
+            n = db.link_document_references(path)
+            if n > 0:
+                details.append({"path": path, "links_created": n})
+                total += n
+        except Exception:
+            pass  # Don't fail the whole batch for one bad doc
+
+    return {
+        "documents_scanned": len(paths),
+        "total_links_created": total,
+        "details": details,
+    }

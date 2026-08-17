@@ -195,11 +195,13 @@ const EVENT_OPTIONS = ['revoked', 'expired', 'cancelled', 'suspended']
 export default function EntanglementView() {
   const [graph, setGraph]       = useState({ nodes: [], edges: [] })
   const [loading, setLoading]   = useState(false)
-  const [selected, setSelected] = useState(null)   // selected Document node
+  const [selected, setSelected] = useState(null)
   const [event, setEvent]       = useState('revoked')
   const [atRisk, setAtRisk]     = useState([])
   const [riskBusy, setRiskBusy] = useState(false)
   const [riskErr, setRiskErr]   = useState(null)
+  const [relinking, setRelinking] = useState(false)
+  const [relinkMsg, setRelinkMsg] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -224,7 +226,6 @@ export default function EntanglementView() {
     try {
       const result = await api.riskChain(selected.id, event, true)
       setAtRisk(result.at_risk || [])
-      // Refresh graph to show updated status colour
       const updated = await api.entanglementGraph()
       setGraph(updated)
     } catch (e) {
@@ -243,6 +244,20 @@ export default function EntanglementView() {
       setGraph(updated)
     } catch (e) {
       console.warn('Restore failed', e)
+    }
+  }
+
+  const doRelink = async () => {
+    setRelinking(true)
+    setRelinkMsg(null)
+    try {
+      const r = await api.relinkAll()
+      setRelinkMsg(`✓ ${r.total_links_created} link(s) built across ${r.documents_scanned} documents.`)
+      await load()
+    } catch (e) {
+      setRelinkMsg(`Error: ${e.message}`)
+    } finally {
+      setRelinking(false)
     }
   }
 
@@ -289,7 +304,21 @@ export default function EntanglementView() {
             <IconEntangle size={15} />
             <h2>Dependency Map</h2>
             <div className="spacer" />
-            <button className="icon-btn" title="Reload" onClick={load}>
+            {relinkMsg && (
+              <span style={{ fontSize: 11, color: 'var(--text-dim)', marginRight: 8 }}>
+                {relinkMsg}
+              </span>
+            )}
+            <button
+              className="btn-secondary"
+              style={{ padding: '3px 10px', fontSize: 12, marginRight: 6 }}
+              title="Re-scan all documents for cross-references and rebuild [:REFERENCES] edges"
+              onClick={doRelink}
+              disabled={relinking}
+            >
+              {relinking ? 'Rebuilding…' : '⟳ Rebuild Links'}
+            </button>
+            <button className="icon-btn" title="Reload graph" onClick={load}>
               <IconRefresh size={15} />
             </button>
           </div>
@@ -308,7 +337,16 @@ export default function EntanglementView() {
             <div className="empty-row">Loading dependency graph…</div>
           ) : nodes.length === 0 ? (
             <div className="empty-row">
-              No document links detected yet. Ingest documents that reference each other (invoices referencing POs, contracts referencing framework agreements) to build the entanglement graph.
+              No document links detected yet.{' '}
+              <button
+                className="btn-secondary"
+                style={{ marginLeft: 8, padding: '3px 10px', fontSize: 12 }}
+                onClick={doRelink}
+                disabled={relinking}
+              >
+                {relinking ? 'Rebuilding…' : '⟳ Rebuild Links'}
+              </button>
+              {relinkMsg && <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--text-dim)' }}>{relinkMsg}</span>}
             </div>
           ) : (
             <DocGraph
@@ -413,7 +451,8 @@ export default function EntanglementView() {
           {selected && atRisk.length === 0 && !riskBusy && (
             <div className="entangle-no-risk">
               <IconCheckCircle size={16} />
-              No downstream dependencies found for <strong>{selected.name}</strong>.
+              No dependencies found for <strong>{selected.name}</strong>.
+              If you expected links, click <strong>Rebuild Links</strong> above to re-scan cross-references.
             </div>
           )}
         </div>

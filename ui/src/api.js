@@ -139,6 +139,7 @@ export const api = {
     post('/api/entanglement/risk', { path, event, update_status }),
   updateDocStatus: (path, status) =>
     post('/api/entanglement/status', { path, status }),
+  relinkAll: () => post('/api/entanglement/relink-all', {}),
 }
 
 // Stable color per entity type — used across the graph visualization.
