@@ -141,21 +141,34 @@ function Message({ msg }) {
 // ─── Upload status pill ────────────────────────────────────────────────────
 
 function UploadPill({ item, onRemove }) {
-  const done  = item.status === 'queued' || item.status === 'zip_extracted'
-  const fail  = item.status === 'failed' || item.status === 'rejected'
-  const busy  = item.status === 'uploading'
+  const done       = item.status === 'completed' || item.status === 'zip_extracted'
+  const fail       = item.status === 'failed'    || item.status === 'rejected'
+  const processing = item.status === 'processing'
+  const busy       = item.status === 'uploading'
+
+  // Status tag text
+  const tag = busy || processing ? null
+    : done  ? (item.status === 'zip_extracted' ? `${item.queued ?? ''} extracted` : 'done ✓')
+    : (item.reason || item.error || item.status)
+
+  // Extra class for processing state (amber pulse)
+  const stateClass = busy || processing ? 'busy' : done ? 'done' : 'fail'
 
   return (
-    <div className={`upload-pill ${done ? 'done' : fail ? 'fail' : 'busy'}`}>
-      {busy ? (
+    <div
+      className={`upload-pill ${stateClass}`}
+      title={item.reason || item.error || item.file}
+    >
+      {busy || processing ? (
         <span className="upload-spinner" />
       ) : done ? (
         <IconCheckCircle size={13} />
       ) : (
         <IconAlertCircle size={13} />
       )}
-      <span className="upload-pill-name" title={item.file}>{item.file}</span>
-      {!busy && (
+      <span className="upload-pill-name">{item.file}</span>
+      {tag && <span className="upload-pill-tag">{tag}</span>}
+      {!busy && !processing && (
         <button className="upload-pill-remove" onClick={() => onRemove(item.file)} title="Dismiss">
           <IconX size={11} />
         </button>
@@ -178,12 +191,12 @@ function DropOverlay() {
 // ─── Main ChatView ─────────────────────────────────────────────────────────
 
 export default function ChatView({ sessionId, onSessionCreated }) {
-  const [messages, setMessages]     = useState([])
-  const [input, setInput]           = useState('')
-  const [busy, setBusy]             = useState(false)
-  const [dragOver, setDragOver]     = useState(false)
-  const [uploadItems, setUploadItems] = useState([])   // {file, status, error?}
-  const [uploading, setUploading]   = useState(false)
+  const [messages, setMessages]       = useState([])
+  const [input, setInput]             = useState('')
+  const [busy, setBusy]               = useState(false)
+  const [dragOver, setDragOver]       = useState(false)
+  const [uploadItems, setUploadItems] = useState([])   // {file, status, reason?}
+  const [uploading, setUploading]     = useState(false)
 
   const threadRef   = useRef(null)
   const textareaRef = useRef(null)
@@ -206,7 +219,54 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     return () => { cancelled = true }
   }, [sessionId])
 
-  // ── Auto-scroll ──────────────────────────────────────────────────────────
+  // ── Poll ingestion status for queued pills ──────────────────────────────
+  useEffect(() => {
+    // Check if any pill is still 'queued' or 'processing' — only then poll.
+    const pending = uploadItems.filter(
+      (i) => i.status === 'queued' || i.status === 'processing'
+    )
+    if (pending.length === 0) return
+
+    // Build a Set of filenames we're waiting on
+    const waitingFor = new Set(pending.map((i) => i.file))
+
+    const intervalId = setInterval(async () => {
+      try {
+        const data = await api.documents()
+        const docs = data.documents ?? []
+        // Build a map: basename(file_path) → status
+        const statusMap = {}
+        for (const d of docs) {
+          const name = d.file_path.split(/[\\/]/).pop()
+          statusMap[name] = d.status
+        }
+
+        setUploadItems((prev) => {
+          let changed = false
+          const next = prev.map((item) => {
+            if (!waitingFor.has(item.file)) return item
+            const srvStatus = statusMap[item.file]
+            if (!srvStatus) return item
+            if (srvStatus === 'completed' || srvStatus === 'failed') {
+              changed = true
+              return { ...item, status: srvStatus }
+            }
+            if (srvStatus === 'processing' && item.status !== 'processing') {
+              changed = true
+              return { ...item, status: 'processing' }
+            }
+            return item
+          })
+          return changed ? next : prev
+        })
+      } catch {
+        // silently ignore polling errors
+      }
+    }, 2000)   // poll every 2 s
+
+    return () => clearInterval(intervalId)
+  }, [uploadItems])
+
   useEffect(() => {
     const el = threadRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -293,20 +353,25 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     setUploading(true)
     try {
       const result = await api.uploadFiles(supported)
-      // Replace the 'uploading' pills with real statuses from server
+      // Server returned results — map by original filename
       setUploadItems((prev) => {
         const resultMap = {}
-        for (const r of result.results) resultMap[r.file] = r
-        return prev.map((item) =>
-          item.status === 'uploading' && resultMap[item.file]
-            ? { ...item, ...resultMap[item.file] }
-            : item
-        )
+        for (const r of result.results ?? []) resultMap[r.file] = r
+        return prev.map((item) => {
+          if (item.status !== 'uploading') return item
+          const srv = resultMap[item.file]
+          // If server has a result for this file, use it; otherwise mark queued
+          return srv ? { ...item, ...srv } : { ...item, status: 'queued' }
+        })
       })
     } catch (err) {
+      // HTTP-level failure (503, network error, etc.) — mark all pending as failed
+      const detail = err.message || 'Upload failed'
       setUploadItems((prev) =>
         prev.map((item) =>
-          item.status === 'uploading' ? { ...item, status: 'failed', error: err.message } : item
+          item.status === 'uploading'
+            ? { ...item, status: 'failed', reason: detail }
+            : item
         )
       )
     } finally {

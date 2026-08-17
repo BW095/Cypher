@@ -99,8 +99,17 @@ class IngestionPipeline:
                 self.qdrant_db.store_chunks(chunks, embeddings)
                 canonical_doc = self.entity_extractor.process_document(canonical_doc)
 
-            # 6. FIX: Store Entities and Relationships in Neo4j Graph
+            # 6. Store Entities and Relationships in Neo4j Graph
             self.neo4j_db.store_graph(canonical_doc)
+            # 6b. Build document entanglement links — match DOC_REFERENCE entities
+            #     extracted from this document against other Document nodes and
+            #     create (this_doc)-[:REFERENCES]->(other_doc) edges.
+            try:
+                links = self.neo4j_db.link_document_references(canonical_doc.file_path)
+                if links:
+                    print(f"  [Entanglement] Created {links} document reference link(s).")
+            except Exception as e:
+                print(f"  [Entanglement] link_document_references failed: {e}")
             # New entities were added — drop the graph retriever's name cache
             # so they're searchable on the very next query.
             try:
@@ -109,9 +118,9 @@ class IngestionPipeline:
                 pass
 
             # 7. Mark as completed and record the content hash for change detection
-            self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "completed")
-            self.tracker.set_document_hash(file_path, content_hash)
-            print(f"Successfully processed and stored: {file_path}")
+            self.tracker.add_or_update_document(canonical_doc.file_path, canonical_doc.file_type, "completed")
+            self.tracker.set_document_hash(canonical_doc.file_path, content_hash)
+            print(f"Successfully processed and stored: {canonical_doc.file_path}")
             sys.stdout.flush()
 
         except Exception as e:

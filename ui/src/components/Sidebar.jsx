@@ -7,6 +7,7 @@ import {
   IconX,
   IconGraph,
   IconShield,
+  IconEntangle,
 } from '../icons'
 
 function StatusChip({ label, ok }) {
@@ -72,6 +73,13 @@ export default function Sidebar({
           >
             <IconShield />
             Compliance
+          </button>
+          <button
+            className={`nav-item ${view === 'entanglement' ? 'active' : ''}`}
+            onClick={() => onChangeView('entanglement')}
+          >
+            <IconEntangle />
+            Entanglement
           </button>
         </nav>
 

@@ -132,6 +132,13 @@ export const api = {
     if (params.category) q.set('category', params.category)
     return `/api/extract/export?${q}`
   },
+
+  // Entanglement Graph
+  entanglementGraph: () => fetch('/api/entanglement/graph').then(handle),
+  riskChain: (path, event = 'revoked', update_status = true) =>
+    post('/api/entanglement/risk', { path, event, update_status }),
+  updateDocStatus: (path, status) =>
+    post('/api/entanglement/status', { path, status }),
 }
 
 // Stable color per entity type — used across the graph visualization.

@@ -910,6 +910,13 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.upload-pill-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
 .upload-pill-remove {
   flex-shrink: 0;
   display: flex;
@@ -1661,6 +1668,155 @@ textarea {
 
 @keyframes fadeIn {
   from { opacity: 0; }
-  to { opacity: 1; }
+  to   { opacity: 1; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   Document Entanglement Graph
+   ═══════════════════════════════════════════════════════════════════ */
+
+.entangle-svg {
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: block;
+  width: 100%;
+}
+
+/* ── Simulation panel ── */
+.entangle-sim {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 0 8px;
+}
+
+.entangle-sim-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.entangle-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.entangle-select {
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .15s;
+}
+.entangle-select:focus { border-color: var(--accent); }
+
+.entangle-event-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.entangle-event-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 20px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: all .15s;
+}
+.entangle-event-btn:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+.entangle-event-btn.active {
+  background: var(--err, #f87171);
+  border-color: var(--err, #f87171);
+  color: #fff;
+  box-shadow: 0 0 8px rgba(248,113,113,0.35);
+}
+
+/* ── At-risk results ── */
+.entangle-results {
+  margin-top: 16px;
+  border: 1px solid rgba(248,113,113,.35);
+  border-radius: var(--radius-md);
+  background: rgba(248,113,113,.06);
+  overflow: hidden;
+  animation: fadeIn .25s ease;
+}
+
+.entangle-results-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(248,113,113,.12);
+  border-bottom: 1px solid rgba(248,113,113,.2);
+  color: var(--err, #f87171);
+  font-size: 13px;
+}
+
+.entangle-source {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.entangle-risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.entangle-risk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  transition: background .12s;
+}
+.entangle-risk-row:last-child { border-bottom: none; }
+.entangle-risk-row:hover { background: var(--bg-raised); }
+
+.entangle-risk-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ── No-risk message ── */
+.entangle-no-risk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(74,222,128,.07);
+  border: 1px solid rgba(74,222,128,.25);
+  color: #4ade80;
+  font-size: 13px;
+}

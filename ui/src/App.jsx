@@ -5,6 +5,7 @@ import ChatView from './components/ChatView'
 import KnowledgeView from './components/KnowledgeView'
 import GraphView from './components/GraphView'
 import ComplianceView from './components/ComplianceView'
+import EntanglementView from './components/EntanglementView'
 import { IconMenu, LogoMark } from './icons'
 
 export default function App() {
@@ -101,6 +102,7 @@ export default function App() {
         {view === 'knowledge' && <KnowledgeView />}
         {view === 'graph' && <GraphView />}
         {view === 'compliance' && <ComplianceView />}
+        {view === 'entanglement' && <EntanglementView />}
       </main>
     </div>
   )

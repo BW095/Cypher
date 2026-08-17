@@ -36,8 +36,8 @@ From the provided text, extract the KEY entities and the explicit relationships 
 
 EXTRACTION DISCIPLINE (read this first — it governs everything below):
 - Be SELECTIVE, not exhaustive. Extract only entities that carry real operational meaning — what an engineer would actually track. A short passage usually yields a HANDFUL of entities, not dozens.
-- Do NOT create a separate entity for any of these: routine clock times or timestamps ("08:15", "13:10"); record/document identifiers such as work-order numbers ("WO-1004"), report/ticket/log numbers; generic words ("system", "data", "report", "issue", "reading"); or vague noun phrases.
-- A record ID (e.g. WO-1004) is a reference to a record, not a physical thing. If a work order matters, capture it ONCE as a PROCEDURE by its subject (e.g. "Mechanical Seal Replacement"), never as a LOCATION and never as something another entity sits "in".
+- Do NOT create a separate entity for any of these: routine clock times or timestamps ("08:15", "13:10"); generic words ("system", "data", "report", "issue", "reading"); or vague noun phrases.
+- A record ID (e.g. WO-1004) is a cross-document reference — capture it as DOC_REFERENCE, not as any other type.
 - Merge duplicates: the same real-world thing mentioned several times is ONE entity — reuse the same id.
 
 Entity types (use EXACTLY these):
@@ -45,29 +45,31 @@ Entity types (use EXACTLY these):
 - COMPONENT: parts of equipment (valves, bearings, seals, impellers).
 - PROCESS_PARAMETER: measured/controlled variables WITH their value when given ("Discharge Pressure 12 bar", "Bearing Temperature 85°C").
 - FAILURE: failure modes, defects, incidents, near-misses, root causes (leaks, overheating, vibration, trips).
-- PROCEDURE: maintenance tasks, inspections, tests, SOPs, and work orders (captured by subject, not by number).
-- REGULATION: standards and regulatory references (Factory Act, OISD, PESO, IS/ISO codes, environmental/quality norms).
+- PROCEDURE: maintenance tasks, inspections, tests, SOPs (captured by subject, not by number).
+- REGULATION: standards and regulatory references (Factory Act, OISD, PESO, IS/ISO codes).
 - PERSONNEL: named people or specific roles ("Shift Engineer", "A. Kumar").
 - MATERIAL: consumables, lubricants, chemicals, spares.
-- LOCATION: real physical places only — plants, units, areas, sections. NOT records, NOT equipment.
-- DATE: only operationally significant dates — a deadline, a scheduled inspection date, an incident date (normalize to YYYY-MM-DD when possible). NOT routine clock times or every timestamp in a log.
+- LOCATION: real physical places only — plants, units, areas, sections.
+- DATE: only operationally significant dates — deadline, scheduled inspection date, incident date (normalize to YYYY-MM-DD when possible).
+- DOC_REFERENCE: any explicit reference to another document by its identifier number — work order numbers ("WO-1004"), purchase order numbers ("PO-2024-45"), invoice numbers ("INV-001"), contract numbers ("CTR-09"), certificate numbers, report IDs, permit numbers. Capture the identifier exactly as written. Use this ONLY for references to OTHER documents, not for this document itself.
 
-Relationship types (use EXACTLY these). Create a relationship ONLY when the text explicitly states or clearly implies it — never invent one just to connect things or make the graph denser:
+Relationship types (use EXACTLY these). Create a relationship ONLY when the text explicitly states or clearly implies it:
 - PART_OF: Component -> Equipment; Equipment -> Location.
 - HAS_FAILURE: Equipment/Component -> Failure.
 - REQUIRES: Equipment/Failure -> Procedure or Material.
 - MEASURES: Process_Parameter -> Equipment/Component.
 - GOVERNED_BY: Equipment/Procedure -> Regulation.
 - RESPONSIBLE_FOR: Personnel -> Equipment/Procedure.
-- LOCATED_IN: Equipment/Personnel -> Location  (the target MUST be a LOCATION entity).
+- LOCATED_IN: Equipment/Personnel -> Location.
 - OCCURRED_ON: Failure/Procedure -> Date.
+- REFERENCES: this document -> DOC_REFERENCE (use when the document explicitly cites another document by ID).
 - RELATES_TO: generic association — use sparingly, only when nothing above fits.
 
 Rules:
-- id: lowercase snake_case, stable and derived from the name ("pump_p101", "bearing_temp_85c"). Reuse the SAME id when the same real-world thing appears twice.
-- name: short canonical name; preserve equipment tags, standard numbers, and units exactly as written.
-- description: a SHORT factual phrase grounded in the text — at most 12 words, no full sentences, never invent facts. Omit filler; capture only the defining detail (e.g. "feed water pump, 12 bar discharge").
-- Every relationship's source_id and target_id MUST be ids present in your entities list, and MUST respect the stated direction and endpoint types (e.g. LOCATED_IN's target is a LOCATION).
+- id: lowercase snake_case, stable and derived from the name. Reuse the SAME id when the same real-world thing appears twice.
+- name: short canonical name; preserve equipment tags, document identifiers, and units exactly as written.
+- description: a SHORT factual phrase grounded in the text — at most 12 words. Omit filler; capture only the defining detail.
+- Every relationship's source_id and target_id MUST be ids present in your entities list.
 
 Output ONLY a valid JSON object, no explanations, no markdown fences:
 {
@@ -99,12 +101,14 @@ Entity types (use EXACTLY these):
 - REGULATION: tax acts, GST provisions, regulatory references cited on the invoice.
 - PERSONNEL: named individuals (not roles) appearing on the document.
 - DATE: dates other than due/payment dates (e.g. invoice date, dispatch date).
+- DOC_REFERENCE: any explicit reference to another document by its identifier — Purchase Order number ("PO-2024-45"), Contract number ("CTR-09"), Work Order, Tender ID, Framework Agreement number, Certificate number. Capture the identifier exactly as written.
 
 Relationship types (use EXACTLY these):
 - PAYABLE_TO: AMOUNT -> CONTRACT_PARTY (who receives the payment).
 - ISSUED_BY: document context -> CERTIFICATE_ISSUER (for any certificate numbers cited).
 - SIGNED_BY: document context -> SIGNATORY.
 - GOVERNED_BY: INVOICE_LINE_ITEM/document -> REGULATION.
+- REFERENCES: this document -> DOC_REFERENCE (when this invoice explicitly references another document by ID).
 - RELATES_TO: generic association — use sparingly.
 - OCCURRED_ON: DATE_DUE or DATE events.
 
@@ -134,16 +138,17 @@ EXTRACTION DISCIPLINE:
 - Merge duplicates: same real-world thing is ONE entity — reuse the same id.
 
 Entity types (use EXACTLY these):
-- CONTRACT_PARTY: named parties, companies, ministries, or individuals who are signatories or stakeholders ("Government of Maharashtra", "XYZ Infrastructure Ltd.").
-- AMOUNT: monetary values, penalties, fees, deposits WITH currency ("₹50 lakhs performance bond", "USD 1,00,000 contract value").
+- CONTRACT_PARTY: named parties, companies, ministries, or individuals who are signatories or stakeholders.
+- AMOUNT: monetary values, penalties, fees, deposits WITH currency.
 - DATE_DUE: deadlines, completion dates, payment schedules, notice periods (normalize to YYYY-MM-DD when possible).
-- SIGNATORY: person or designation authorised to sign ("Secretary, Ministry of Roads", "Managing Director").
+- SIGNATORY: person or designation authorised to sign.
 - JURISDICTION: governing law, courts, arbitration seat, place of execution.
 - REGULATION: laws, acts, clauses, standards referenced in the contract.
 - PROCEDURE: defined processes, milestones, deliverables, or work scope items.
 - PERSONNEL: named individuals (not generic roles) mentioned in the document.
 - LOCATION: physical sites, project locations, addresses relevant to contract execution.
 - DATE: dates other than deadlines (e.g. execution date, commencement date).
+- DOC_REFERENCE: any explicit reference to another document by its identifier — Invoice number, Purchase Order number, Tender ID, Framework Agreement number, Certificate number, previous contract number. Capture the identifier exactly as written.
 
 Relationship types (use EXACTLY these):
 - SIGNED_BY: CONTRACT_PARTY or document -> SIGNATORY.
@@ -152,6 +157,7 @@ Relationship types (use EXACTLY these):
 - OCCURRED_ON: PROCEDURE/DATE_DUE event -> DATE.
 - LOCATED_IN: PROCEDURE/work -> LOCATION.
 - RESPONSIBLE_FOR: CONTRACT_PARTY -> PROCEDURE.
+- REFERENCES: this document -> DOC_REFERENCE (when this contract explicitly references another document by ID).
 - RELATES_TO: generic association — use sparingly.
 
 Rules:
@@ -226,26 +232,28 @@ EXTRACTION DISCIPLINE:
 
 Entity types (use EXACTLY these):
 - FORM_FIELD: a labeled field WITH its filled value ("Applicant Name: Ravi Kumar", "Date of Birth: 1985-06-15", "Annual Income: ₹3,50,000"). Only extract fields that have a non-empty value.
-- CONTRACT_PARTY: named organisations, departments, or institutions referenced ("District Collector's Office", "NHAI").
+- CONTRACT_PARTY: named organisations, departments, or institutions referenced.
 - SIGNATORY: person or designation who signs or declares on the form.
 - JURISDICTION: taluk, district, state, or court referenced as governing authority.
-- AMOUNT: any monetary value WITH currency declared on the form ("Application Fee ₹500", "Challan Amount ₹1,200").
+- AMOUNT: any monetary value WITH currency declared on the form.
 - DATE_DUE: submission deadline, validity date (normalize to YYYY-MM-DD when possible).
 - REGULATION: act, rule, scheme, or government order the form pertains to.
 - PERSONNEL: named individuals (not just roles) filling or approving the form.
 - DATE: dates stated on the form other than deadlines (YYYY-MM-DD when possible).
 - LOCATION: specific addresses, village, district, state written on the form.
+- DOC_REFERENCE: any explicit reference to another document by its identifier — Application number, Certificate number, License number, Order number, previous form or registration ID. Capture the identifier exactly as written.
 
 Relationship types (use EXACTLY these):
 - SIGNED_BY: form context -> SIGNATORY.
 - GOVERNED_BY: form/FORM_FIELD -> REGULATION or JURISDICTION.
 - PAYABLE_TO: AMOUNT -> CONTRACT_PARTY.
 - LOCATED_IN: PERSONNEL/CONTRACT_PARTY -> LOCATION.
+- REFERENCES: this document -> DOC_REFERENCE (when this form explicitly references another document by ID).
 - RELATES_TO: generic association — use sparingly.
 - OCCURRED_ON: DATE_DUE or DATE events.
 
 Rules:
-- id: lowercase snake_case derived from the field label and value ("form_field_applicant_name_ravi_kumar"). Reuse SAME id for the same real-world thing.
+- id: lowercase snake_case derived from the field label and value. Reuse SAME id for the same real-world thing.
 - name: "FieldLabel: Value" for FORM_FIELD; short canonical name for other types.
 - description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
 - Every relationship's source_id and target_id MUST appear in your entities list.
@@ -276,9 +284,12 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
         "CERTIFICATE_ISSUER", "FORM_FIELD", "SIGNATORY", "JURISDICTION",
     }
 
-    # Union — all types accepted by the canonicaliser. Types from the LLM that
-    # are NOT in this set are dropped to keep the graph vocabulary clean.
-    _KNOWN_TYPES = _INDUSTRIAL_TYPES | _GOVERNMENT_TYPES
+    # Cross-document reference — used by the Document Entanglement Graph.
+    # Every prompt instructs the LLM to extract these as DOC_REFERENCE.
+    _ENTANGLEMENT_TYPES = {"DOC_REFERENCE"}
+
+    # Union — all types accepted by the canonicaliser.
+    _KNOWN_TYPES = _INDUSTRIAL_TYPES | _GOVERNMENT_TYPES | _ENTANGLEMENT_TYPES
 
     # ------------------------------------------------------------------
     # Prompt router
