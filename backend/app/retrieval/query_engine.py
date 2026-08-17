@@ -24,11 +24,20 @@ from app.config import RetrievalConfig, LLMConfig
 _SYSTEM_PROMPT = """You are Cypher, an expert AI knowledge copilot that handles two document domains:
 
 1. **Industrial / Engineering** — maintenance reports, P&IDs, work orders, inspection records, equipment manuals, compliance documents, and emails from plants, factories, and engineering organisations.
-2. **Government / Regulatory** — invoices, contracts, agreements, MoUs, certificates (GST, NOC, registration, calibration), application forms, challans, and official correspondence.
+2. **Government / Regulatory** — invoices, contracts, agreements, MoUs, certificates (GST, NOC, registration, calibration, drug license), application forms, challans, and official correspondence.
 
 The knowledge graph you draw from may contain entities from both domains, including:
 - Industrial types: EQUIPMENT, COMPONENT, PROCESS_PARAMETER, FAILURE, PROCEDURE, REGULATION, PERSONNEL, MATERIAL, LOCATION, DATE
 - Government types: INVOICE_LINE_ITEM, CONTRACT_PARTY, AMOUNT, DATE_DUE, CERTIFICATE_ISSUER, FORM_FIELD, SIGNATORY, JURISDICTION
+
+CERTIFICATE & VALIDITY DATES (read before answering any compliance question):
+- DATE_DUE entities represent expiry dates, renewal deadlines, or validity end-dates for certificates, licenses, and registrations.
+- VALID_UNTIL relationships link a certificate or licence holder to its DATE_DUE.
+- Whenever the question is about compliance, validity, expiry, renewal, or whether a document/licence is still active, you MUST:
+  1. Check the context for DATE_DUE entities and VALID_UNTIL relationships.
+  2. State the exact expiry or renewal date found (e.g. "Drug License valid till 2025-08-31").
+  3. If the date is in the past relative to today, flag it as **EXPIRED** and mark it as a Compliance Gap.
+  4. If no expiry date is found in the context, explicitly say so — do not assume the licence is valid.
 
 CITATION RULES (mandatory):
 - You MUST explicitly name the source files in your text.
@@ -311,8 +320,28 @@ class QueryEngine:
                 })
 
         # Add the current question with context
+        # Detect if this is a compliance / validity / expiry question so we can
+        # give the LLM a targeted nudge to surface certificate expiry dates.
+        q_lower = user_message.lower()
+        is_compliance_q = any(kw in q_lower for kw in (
+            "expir", "valid", "renewal", "renew", "license", "licence",
+            "certificate", "compliance", "due date", "expired", "deadline",
+        ))
+
+        expiry_hint = ""
+        if is_compliance_q:
+            expiry_hint = (
+                "\n⚠️ This question relates to compliance or validity. "
+                "Before answering, scan the context for:\n"
+                "  • DATE_DUE entities (expiry dates, renewal deadlines)\n"
+                "  • VALID_UNTIL relationships linking certificates to their expiry dates\n"
+                "  • Any phrases like 'valid till', 'expiry date', 'renewal due', 'expires on'\n"
+                "State every expiry date you find, flag any that are past as EXPIRED, "
+                "and explicitly note if no expiry date was found in the context.\n"
+            )
+
         user_content = f"""Based on the following context from the company's knowledge base, answer the user's question.
-Remember: cite the exact file name in square brackets after every claim, and finish with a **Sources:** line.
+Remember: cite the exact file name in square brackets after every claim, and finish with a **Sources:** line.{expiry_hint}
 
 {context}
 

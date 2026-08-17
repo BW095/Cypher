@@ -211,26 +211,38 @@ export default function KnowledgeView() {
             <table className="doc-table">
               <thead>
                 <tr>
-                  <th>File</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Updated</th>
+                  <th style={{ width: '44%' }}>File</th>
+                  <th style={{ width: '13%' }}>Type</th>
+                  <th style={{ width: '13%' }}>Category</th>
+                  <th style={{ width: '14%' }}>Status</th>
+                  <th style={{ width: '16%' }}>Updated</th>
                 </tr>
               </thead>
               <tbody>
-                {documents.map((doc) => (
-                  <tr key={doc.file_path}>
-                    <td>
-                      <div className="doc-name">{baseName(doc.file_path)}</div>
-                      <div className="doc-path">{doc.file_path}</div>
-                    </td>
-                    <td className="doc-type">{doc.file_type || '—'}</td>
-                    <td>
-                      <StatusBadge status={doc.status} />
-                    </td>
-                    <td className="doc-chunks">{timeAgo(doc.ingested_at)}</td>
-                  </tr>
-                ))}
+                {documents.map((doc) => {
+                  const name = baseName(doc.file_path)
+                  // Shorten type to just the extension-like token (e.g. "office_document" → "office")
+                  const typeShort = (doc.file_type || '').replace(/_document$/, '').replace(/_/g, ' ') || '—'
+                  const cat = doc.doc_category || ''
+                  return (
+                    <tr key={doc.file_path} title={doc.file_path}>
+                      <td>
+                        <div className="doc-name">{name}</div>
+                        <div className="doc-path">{doc.file_path}</div>
+                      </td>
+                      <td className="doc-type">
+                        <span className="doc-type-badge">{typeShort}</span>
+                      </td>
+                      <td>
+                        {cat && <span className="badge dim">{cat}</span>}
+                      </td>
+                      <td>
+                        <StatusBadge status={doc.status} />
+                      </td>
+                      <td className="doc-chunks">{timeAgo(doc.ingested_at)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}

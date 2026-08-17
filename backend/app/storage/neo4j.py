@@ -88,11 +88,16 @@ class Neo4jStorage:
         # (e.g. -[:HAS_FAILURE]->) rather than a generic -[:RELATED_TO {type}]->,
         # so the graph is queryable/colorable by real relationship types.
         # The type is sanitized (it can't be a bound parameter in Cypher).
+        # Fix 1: MERGE is already idempotent on (source, type, target); we add
+        # ON CREATE / ON MATCH timestamps so repeated ingestion of the same doc
+        # never produces duplicate edges — it just updates the timestamp.
         rel_type = self._safe_rel_type(rel.get("type"))
         query = f"""
         MATCH (source:Entity {{id: $source_id}})
         MATCH (target:Entity {{id: $target_id}})
-        MERGE (source)-[:{rel_type}]->(target)
+        MERGE (source)-[r:{rel_type}]->(target)
+        ON CREATE SET r.created_at = datetime()
+        ON MATCH  SET r.updated_at = datetime()
         """
         try:
             self.driver.execute_query(

@@ -185,30 +185,43 @@ EXTRACTION DISCIPLINE:
 - Do NOT create entities for generic boilerplate ("this is to certify that", "as per the provisions of").
 - Merge duplicates: same real-world thing is ONE entity — reuse the same id.
 
+⚠️ CRITICAL — EXPIRY / VALIDITY DATES (highest priority):
+Any phrase that indicates when the certificate/license stops being valid MUST be extracted as a DATE_DUE entity.
+These phrases always signal a DATE_DUE:
+  "valid till …", "valid until …", "valid up to …", "valid through …",
+  "expiry date …", "expires on …", "expiring on …",
+  "renewal due …", "renewal date …", "next renewal …",
+  "validity: …", "valid for … years/months from …".
+Extract the exact date (normalize to YYYY-MM-DD when possible) and create a VALID_UNTIL relationship:
+  (certificate entity / CONTRACT_PARTY) -[:VALID_UNTIL]-> (DATE_DUE entity)
+Failure to extract these dates makes compliance checking impossible.
+
 Entity types (use EXACTLY these):
 - CERTIFICATE_ISSUER: authority, department, or body that issued the certificate ("Registrar of Companies", "Bureau of Indian Standards", "Municipal Corporation").
 - CONTRACT_PARTY: entity or individual the certificate is awarded/issued to.
 - SIGNATORY: person, designation, or role who signed/authenticated the certificate.
-- DATE_DUE: validity expiry date, renewal date (normalize to YYYY-MM-DD when possible).
+- DATE_DUE: ⚠️ validity expiry date, renewal due date, or any date the certificate ceases to be valid (normalize to YYYY-MM-DD when possible). This is the most important date on the document.
 - JURISDICTION: state, district, governing authority, or area of validity.
 - REGULATION: act, rule, section, or standard under which the certificate is issued.
 - AMOUNT: any fee, penalty, or bond amount mentioned WITH currency.
 - PERSONNEL: named individuals (inspectors, certifying officers) mentioned.
-- DATE: issue date, inspection date, commencement date (YYYY-MM-DD when possible).
+- DATE: issue date, inspection date, commencement date — dates that are NOT the expiry (YYYY-MM-DD when possible).
 - LOCATION: physical address, plant site, registered office relevant to the certificate.
+- DOC_REFERENCE: any explicit reference to another document by its identifier — certificate number, license number, application number, previous registration ID. Capture exactly as written.
 
 Relationship types (use EXACTLY these):
 - ISSUED_BY: certificate context -> CERTIFICATE_ISSUER.
 - SIGNED_BY: certificate context -> SIGNATORY.
 - GOVERNED_BY: certificate/certification -> REGULATION or JURISDICTION.
-- VALID_UNTIL: certificate context -> DATE_DUE.
+- VALID_UNTIL: ⚠️ (certificate holder / CERTIFICATE_ISSUER / CONTRACT_PARTY) -> DATE_DUE. ALWAYS create this when an expiry or renewal date is present.
 - LOCATED_IN: CONTRACT_PARTY/PERSONNEL -> LOCATION.
+- REFERENCES: this document -> DOC_REFERENCE.
 - RELATES_TO: generic association — use sparingly.
 
 Rules:
 - id: lowercase snake_case derived from the name. Reuse SAME id for the same real-world thing.
-- name: short canonical name; preserve certificate numbers, registration numbers exactly.
-- description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
+- name: short canonical name; preserve certificate numbers, registration numbers, and dates exactly as written.
+- description: SHORT factual phrase (≤12 words) grounded in the text. For DATE_DUE, include "expiry" or "renewal due" in the description so it is clear this is a validity deadline.
 - Every relationship's source_id and target_id MUST appear in your entities list.
 
 Output ONLY a valid JSON object, no explanations, no markdown fences:
@@ -492,16 +505,46 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
 
         canon_rels = []
         seen_rels = set()
+
+        # Relationships that are truly symmetric — we deduplicate both directions
+        # so two windows that extract (A→B) and (B→A) for the same RELATES_TO
+        # edge don't both survive into Neo4j.
+        _SYMMETRIC = {"RELATES_TO", "REFERENCES"}
+
+        # Fix 3 — PAYABLE_TO direction.
+        # Correct semantic: AMOUNT -[:PAYABLE_TO]-> CONTRACT_PARTY
+        # (the payment goes FROM the amount TO the recipient).
+        # The LLM frequently gets this backwards for vendor→government flows.
+        # Correction: if source is a CONTRACT_PARTY and target is an AMOUNT, flip.
+        def _maybe_fix_direction(src_id: str, tgt_id: str, rtype: str):
+            if rtype != "PAYABLE_TO":
+                return src_id, tgt_id
+            src_ent = merged.get(src_id, {})
+            tgt_ent = merged.get(tgt_id, {})
+            src_type = src_ent.get("type", "")
+            tgt_type = tgt_ent.get("type", "")
+            # If source is a party (not an amount) and target is an amount → flip
+            if src_type == "CONTRACT_PARTY" and tgt_type == "AMOUNT":
+                return tgt_id, src_id
+            # If source is an amount and target is a party → correct already
+            return src_id, tgt_id
+
         for rel in relationships:
             src = old_to_canon.get(str(rel.get("source_id")))
             tgt = old_to_canon.get(str(rel.get("target_id")))
             if not src or not tgt or src == tgt:
-                continue  # dangling or self-loop — drop (incl. endpoints we just dropped)
+                continue  # dangling or self-loop — drop
             rtype = self._normalize_type(rel.get("type")) if rel.get("type") else "RELATES_TO"
+
+            # Apply direction correction before deduplication check
+            src, tgt = _maybe_fix_direction(src, tgt, rtype)
+
             key = (src, tgt, rtype)
-            if key in seen_rels:
+            # Fix 1 — for symmetric types, treat (A,B,T) and (B,A,T) as the same edge
+            undirected_key = (min(src, tgt), max(src, tgt), rtype) if rtype in _SYMMETRIC else key
+            if undirected_key in seen_rels:
                 continue
-            seen_rels.add(key)
+            seen_rels.add(undirected_key)
             canon_rels.append({"source_id": src, "target_id": tgt, "type": rtype})
 
         return list(merged.values()), canon_rels
