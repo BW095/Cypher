@@ -173,20 +173,27 @@ class Neo4jStorage:
             logging.error(f"Error deleting document {file_path} from graph: {e}")
 
     def _merge_document(self, document: CanonicalDocument):
-        # Create/update the node for the document itself
+        # Create/update the node for the document itself, including the
+        # domain/category classification so the extraction API can read them
+        # without re-running the classifier.
         doc_query = """
         MERGE (d:Document {path: $file_path})
-        SET d.type = $file_type
+        SET d.type = $file_type,
+            d.doc_domain   = $doc_domain,
+            d.doc_category = $doc_category
         """
         try:
             self.driver.execute_query(
                 doc_query,
                 file_path=document.file_path,
                 file_type=document.file_type,
+                doc_domain=getattr(document, "doc_domain", "industrial"),
+                doc_category=getattr(document, "doc_category", "general"),
                 database_=self.database
             )
         except Exception as e:
             logging.error(f"Error merging document node {document.file_path}: {e}")
+
 
     def _link_document_to_entities(self, document: CanonicalDocument):
         # Link the document node to the extracted entities

@@ -170,11 +170,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Cypher AI Brain",
     description=(
-        "Industrial AI knowledge engine that understands company documents, "
-        "connects them through a knowledge graph, and provides intelligent "
-        "answers grounded in your data."
+        "Industrial & government document AI knowledge engine. Understands company "
+        "documents, connects them through a knowledge graph, provides intelligent "
+        "answers grounded in your data, and exports structured field-level data "
+        "(invoice totals, contract parties, certificate validity, etc.) to "
+        "CSV / Excel / JSON."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -195,12 +197,14 @@ from app.api.ingestion import router as ingestion_router
 from app.api.documents import router as documents_router
 from app.api.graph import router as graph_router
 from app.api.compliance import router as compliance_router
+from app.api.extract import router as extract_router
 
 app.include_router(chat_router)
 app.include_router(ingestion_router)
 app.include_router(documents_router)
 app.include_router(graph_router)
 app.include_router(compliance_router)
+app.include_router(extract_router)
 
 
 # ---------------------------------------------------------------------------

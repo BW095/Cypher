@@ -10,6 +10,7 @@ from app.storage.qdrant import QdrantStorage
 from app.storage.sqlite import SQLiteStorage
 from app.storage.neo4j import Neo4jStorage  # Ensure this is imported
 from app.ai.entity_extractor import EntityExtractor
+from app.ai.document_classifier import DocumentClassifier
 
 
 # Hard ceiling on chunks per document (embedding is CPU-bound and serial).
@@ -34,6 +35,8 @@ class IngestionPipeline:
         self.qdrant_db = QdrantStorage()
         self.neo4j_db = Neo4jStorage()
         self.entity_extractor = EntityExtractor()
+        self.classifier = DocumentClassifier()
+
     def process_file(self, file_path: str):
         try:
             print(f"Starting pipeline for: {file_path}")
@@ -69,6 +72,11 @@ class IngestionPipeline:
 
             # Update file type in tracker
             self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "processing")
+
+            # 2b. Classify document domain/category (heuristic, no LLM call).
+            #     This sets doc_domain and doc_category on the canonical_doc so
+            #     the entity extractor can select the right extraction prompt.
+            canonical_doc = self.classifier.classify(canonical_doc)
 
             # 3. Chunk the text
             chunks = self.chunker.chunk_document(canonical_doc)

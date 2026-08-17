@@ -9,6 +9,8 @@ from app.ingestion.canonical_document import CanonicalDocument
 
 from app.ai.llm import LLMWrapper
 from app.config import ExtractionConfig, ModelConfig
+
+
 class EntityExtractor:
     def __init__(self):
         # Use the dedicated (smaller, faster) extraction model when its file is
@@ -23,7 +25,13 @@ class EntityExtractor:
             print(f"[EntityExtractor] Using dedicated extraction model: {extraction_path}")
         self.llm = LLMWrapper(model_path=extraction_path)
 
-        self.system_prompt = """You are an AI expert in industrial knowledge extraction for plants, factories, and engineering organisations.
+    # ------------------------------------------------------------------
+    # System prompts — one per document category
+    # ------------------------------------------------------------------
+
+    # Default prompt for industrial documents (maintenance reports, P&IDs,
+    # work orders, inspection records, manuals, compliance documents, emails).
+    _INDUSTRIAL_PROMPT = """You are an AI expert in industrial knowledge extraction for plants, factories, and engineering organisations.
 From the provided text, extract the KEY entities and the explicit relationships between them to build a unified knowledge graph. Sources include maintenance reports, P&IDs, work orders, inspection records, manuals, compliance documents, and emails.
 
 EXTRACTION DISCIPLINE (read this first — it governs everything below):
@@ -71,10 +79,244 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
     ]
 }"""
 
+    # Prompt for government invoices / bills / receipts.
+    _INVOICE_PROMPT = """You are an AI expert in government and commercial document knowledge extraction.
+From the provided invoice / bill / receipt text, extract the KEY entities and explicit relationships to build a knowledge graph.
+
+EXTRACTION DISCIPLINE:
+- Be SELECTIVE. Extract only entities with real financial or transactional meaning.
+- Do NOT create entities for generic labels ("description", "item", "s.no."), column headers, or every repeated boilerplate line.
+- Merge duplicates: same real-world thing mentioned several times is ONE entity — reuse the same id.
+
+Entity types (use EXACTLY these):
+- INVOICE_LINE_ITEM: individual goods or services listed on the invoice, including quantity and unit price when stated ("Office Chairs x10 @ ₹2,500").
+- CONTRACT_PARTY: named buyer, seller, vendor, client, or organisation on the invoice ("ABC Supplies Pvt. Ltd.", "Ministry of Finance").
+- AMOUNT: any monetary total or subtotal WITH currency ("₹1,25,000", "USD 5,000", "Total GST ₹22,500").
+- DATE_DUE: payment due date, invoice date, delivery date (normalize to YYYY-MM-DD when possible).
+- CERTIFICATE_ISSUER: authority that issued any referenced certificate or registration (GST authority, MSME, etc.).
+- SIGNATORY: person or role who signed or authorised the invoice ("Authorised Signatory", "Chief Financial Officer").
+- JURISDICTION: place of supply, state, or governing authority mentioned.
+- REGULATION: tax acts, GST provisions, regulatory references cited on the invoice.
+- PERSONNEL: named individuals (not roles) appearing on the document.
+- DATE: dates other than due/payment dates (e.g. invoice date, dispatch date).
+
+Relationship types (use EXACTLY these):
+- PAYABLE_TO: AMOUNT -> CONTRACT_PARTY (who receives the payment).
+- ISSUED_BY: document context -> CERTIFICATE_ISSUER (for any certificate numbers cited).
+- SIGNED_BY: document context -> SIGNATORY.
+- GOVERNED_BY: INVOICE_LINE_ITEM/document -> REGULATION.
+- RELATES_TO: generic association — use sparingly.
+- OCCURRED_ON: DATE_DUE or DATE events.
+
+Rules:
+- id: lowercase snake_case derived from the name. Reuse SAME id for the same real-world thing.
+- name: short canonical name; preserve currency symbols and values exactly.
+- description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
+- Every relationship's source_id and target_id MUST appear in your entities list.
+
+Output ONLY a valid JSON object, no explanations, no markdown fences:
+{
+    "entities": [
+        {"id": "unique_string_id", "name": "Entity Name", "type": "ENTITY_TYPE", "description": "Short description"}
+    ],
+    "relationships": [
+        {"source_id": "id_of_source_entity", "target_id": "id_of_target_entity", "type": "RELATIONSHIP_TYPE"}
+    ]
+}"""
+
+    # Prompt for government contracts / agreements / MoUs.
+    _CONTRACT_PROMPT = """You are an AI expert in government and legal document knowledge extraction.
+From the provided contract / agreement / MoU text, extract the KEY entities and explicit relationships to build a knowledge graph.
+
+EXTRACTION DISCIPLINE:
+- Be SELECTIVE. Extract parties, obligations, amounts, key dates, jurisdiction, and signatories — not boilerplate preamble words.
+- Do NOT create entities for generic legal phrases ("whereas", "hereof", "thereof").
+- Merge duplicates: same real-world thing is ONE entity — reuse the same id.
+
+Entity types (use EXACTLY these):
+- CONTRACT_PARTY: named parties, companies, ministries, or individuals who are signatories or stakeholders ("Government of Maharashtra", "XYZ Infrastructure Ltd.").
+- AMOUNT: monetary values, penalties, fees, deposits WITH currency ("₹50 lakhs performance bond", "USD 1,00,000 contract value").
+- DATE_DUE: deadlines, completion dates, payment schedules, notice periods (normalize to YYYY-MM-DD when possible).
+- SIGNATORY: person or designation authorised to sign ("Secretary, Ministry of Roads", "Managing Director").
+- JURISDICTION: governing law, courts, arbitration seat, place of execution.
+- REGULATION: laws, acts, clauses, standards referenced in the contract.
+- PROCEDURE: defined processes, milestones, deliverables, or work scope items.
+- PERSONNEL: named individuals (not generic roles) mentioned in the document.
+- LOCATION: physical sites, project locations, addresses relevant to contract execution.
+- DATE: dates other than deadlines (e.g. execution date, commencement date).
+
+Relationship types (use EXACTLY these):
+- SIGNED_BY: CONTRACT_PARTY or document -> SIGNATORY.
+- GOVERNED_BY: contract/PROCEDURE -> REGULATION or JURISDICTION.
+- PAYABLE_TO: AMOUNT -> CONTRACT_PARTY.
+- OCCURRED_ON: PROCEDURE/DATE_DUE event -> DATE.
+- LOCATED_IN: PROCEDURE/work -> LOCATION.
+- RESPONSIBLE_FOR: CONTRACT_PARTY -> PROCEDURE.
+- RELATES_TO: generic association — use sparingly.
+
+Rules:
+- id: lowercase snake_case derived from the name. Reuse SAME id for the same real-world thing.
+- name: short canonical name; preserve currency symbols, article numbers, clause references exactly.
+- description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
+- Every relationship's source_id and target_id MUST appear in your entities list.
+
+Output ONLY a valid JSON object, no explanations, no markdown fences:
+{
+    "entities": [
+        {"id": "unique_string_id", "name": "Entity Name", "type": "ENTITY_TYPE", "description": "Short description"}
+    ],
+    "relationships": [
+        {"source_id": "id_of_source_entity", "target_id": "id_of_target_entity", "type": "RELATIONSHIP_TYPE"}
+    ]
+}"""
+
+    # Prompt for government certificates / registrations / licenses / NOCs.
+    _CERTIFICATE_PROMPT = """You are an AI expert in government certificate and regulatory document knowledge extraction.
+From the provided certificate / registration / license / NOC text, extract the KEY entities and explicit relationships to build a knowledge graph.
+
+EXTRACTION DISCIPLINE:
+- Be SELECTIVE. Focus on: who issued it, who it was awarded to, what it certifies, validity period, and signatories.
+- Do NOT create entities for generic boilerplate ("this is to certify that", "as per the provisions of").
+- Merge duplicates: same real-world thing is ONE entity — reuse the same id.
+
+Entity types (use EXACTLY these):
+- CERTIFICATE_ISSUER: authority, department, or body that issued the certificate ("Registrar of Companies", "Bureau of Indian Standards", "Municipal Corporation").
+- CONTRACT_PARTY: entity or individual the certificate is awarded/issued to.
+- SIGNATORY: person, designation, or role who signed/authenticated the certificate.
+- DATE_DUE: validity expiry date, renewal date (normalize to YYYY-MM-DD when possible).
+- JURISDICTION: state, district, governing authority, or area of validity.
+- REGULATION: act, rule, section, or standard under which the certificate is issued.
+- AMOUNT: any fee, penalty, or bond amount mentioned WITH currency.
+- PERSONNEL: named individuals (inspectors, certifying officers) mentioned.
+- DATE: issue date, inspection date, commencement date (YYYY-MM-DD when possible).
+- LOCATION: physical address, plant site, registered office relevant to the certificate.
+
+Relationship types (use EXACTLY these):
+- ISSUED_BY: certificate context -> CERTIFICATE_ISSUER.
+- SIGNED_BY: certificate context -> SIGNATORY.
+- GOVERNED_BY: certificate/certification -> REGULATION or JURISDICTION.
+- VALID_UNTIL: certificate context -> DATE_DUE.
+- LOCATED_IN: CONTRACT_PARTY/PERSONNEL -> LOCATION.
+- RELATES_TO: generic association — use sparingly.
+
+Rules:
+- id: lowercase snake_case derived from the name. Reuse SAME id for the same real-world thing.
+- name: short canonical name; preserve certificate numbers, registration numbers exactly.
+- description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
+- Every relationship's source_id and target_id MUST appear in your entities list.
+
+Output ONLY a valid JSON object, no explanations, no markdown fences:
+{
+    "entities": [
+        {"id": "unique_string_id", "name": "Entity Name", "type": "ENTITY_TYPE", "description": "Short description"}
+    ],
+    "relationships": [
+        {"source_id": "id_of_source_entity", "target_id": "id_of_target_entity", "type": "RELATIONSHIP_TYPE"}
+    ]
+}"""
+
+    # Prompt for government application forms / challan / nomination forms.
+    _FORM_PROMPT = """You are an AI expert in government form and application document knowledge extraction.
+From the provided form / application / challan text, extract the KEY entities and explicit relationships to build a knowledge graph.
+
+EXTRACTION DISCIPLINE:
+- Be SELECTIVE. Focus on: labeled fields with values, declared amounts, jurisdiction, signatories, and referenced regulations.
+- Do NOT create entities for empty form fields, column headers, or blank lines.
+- Merge duplicates: same real-world thing is ONE entity — reuse the same id.
+
+Entity types (use EXACTLY these):
+- FORM_FIELD: a labeled field WITH its filled value ("Applicant Name: Ravi Kumar", "Date of Birth: 1985-06-15", "Annual Income: ₹3,50,000"). Only extract fields that have a non-empty value.
+- CONTRACT_PARTY: named organisations, departments, or institutions referenced ("District Collector's Office", "NHAI").
+- SIGNATORY: person or designation who signs or declares on the form.
+- JURISDICTION: taluk, district, state, or court referenced as governing authority.
+- AMOUNT: any monetary value WITH currency declared on the form ("Application Fee ₹500", "Challan Amount ₹1,200").
+- DATE_DUE: submission deadline, validity date (normalize to YYYY-MM-DD when possible).
+- REGULATION: act, rule, scheme, or government order the form pertains to.
+- PERSONNEL: named individuals (not just roles) filling or approving the form.
+- DATE: dates stated on the form other than deadlines (YYYY-MM-DD when possible).
+- LOCATION: specific addresses, village, district, state written on the form.
+
+Relationship types (use EXACTLY these):
+- SIGNED_BY: form context -> SIGNATORY.
+- GOVERNED_BY: form/FORM_FIELD -> REGULATION or JURISDICTION.
+- PAYABLE_TO: AMOUNT -> CONTRACT_PARTY.
+- LOCATED_IN: PERSONNEL/CONTRACT_PARTY -> LOCATION.
+- RELATES_TO: generic association — use sparingly.
+- OCCURRED_ON: DATE_DUE or DATE events.
+
+Rules:
+- id: lowercase snake_case derived from the field label and value ("form_field_applicant_name_ravi_kumar"). Reuse SAME id for the same real-world thing.
+- name: "FieldLabel: Value" for FORM_FIELD; short canonical name for other types.
+- description: SHORT factual phrase (≤12 words) grounded in the text. Never invent facts.
+- Every relationship's source_id and target_id MUST appear in your entities list.
+
+Output ONLY a valid JSON object, no explanations, no markdown fences:
+{
+    "entities": [
+        {"id": "unique_string_id", "name": "Entity Name", "type": "ENTITY_TYPE", "description": "Short description"}
+    ],
+    "relationships": [
+        {"source_id": "id_of_source_entity", "target_id": "id_of_target_entity", "type": "RELATIONSHIP_TYPE"}
+    ]
+}"""
+
+    # ------------------------------------------------------------------
+    # Entity type vocabulary
+    # ------------------------------------------------------------------
+
+    # Industrial entity types (existing).
+    _INDUSTRIAL_TYPES = {
+        "EQUIPMENT", "COMPONENT", "PROCESS_PARAMETER", "FAILURE", "PROCEDURE",
+        "REGULATION", "PERSONNEL", "MATERIAL", "LOCATION", "DATE",
+    }
+
+    # Government-specific entity types added for this pipeline extension.
+    _GOVERNMENT_TYPES = {
+        "INVOICE_LINE_ITEM", "CONTRACT_PARTY", "AMOUNT", "DATE_DUE",
+        "CERTIFICATE_ISSUER", "FORM_FIELD", "SIGNATORY", "JURISDICTION",
+    }
+
+    # Union — all types accepted by the canonicaliser. Types from the LLM that
+    # are NOT in this set are dropped to keep the graph vocabulary clean.
+    _KNOWN_TYPES = _INDUSTRIAL_TYPES | _GOVERNMENT_TYPES
+
+    # ------------------------------------------------------------------
+    # Prompt router
+    # ------------------------------------------------------------------
+
+    _PROMPT_MAP: Dict[str, str] = {}  # filled lazily in __init__
+
+    def __init__(self):
+        # Use the dedicated (smaller, faster) extraction model when its file is
+        # present; otherwise transparently fall back to the main chat model, so
+        # a missing/incomplete download never breaks ingestion.
+        extraction_path = ModelConfig.EXTRACTION_MODEL_PATH or None
+        if extraction_path and not os.path.exists(extraction_path):
+            print(f"[EntityExtractor] Extraction model not found at {extraction_path} "
+                  f"— using the main model for extraction.")
+            extraction_path = None
+        if extraction_path:
+            print(f"[EntityExtractor] Using dedicated extraction model: {extraction_path}")
+        self.llm = LLMWrapper(model_path=extraction_path)
+
+        # Map doc_category → system prompt.
+        self._PROMPT_MAP = {
+            "general":     self._INDUSTRIAL_PROMPT,
+            "invoice":     self._INVOICE_PROMPT,
+            "contract":    self._CONTRACT_PROMPT,
+            "certificate": self._CERTIFICATE_PROMPT,
+            "form":        self._FORM_PROMPT,
+        }
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def process_document(self, document: CanonicalDocument) -> CanonicalDocument:
         """
         Analyzes the document text, extracts entities/relationships, and appends them to the document.
-        If the document is too long, we extract from the first 4000 characters to prevent LLM context overflow.
+        Routes to the correct extraction prompt based on the document's detected category
+        (set by DocumentClassifier before this step).
         """
         print(f"Extracting entities for: {document.file_path}")
         sys.stdout.flush()
@@ -82,6 +324,12 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
         if not document.text:
             print("  Skipping entity extraction: no text content.")
             return document
+
+        # Select the prompt for this document's category.
+        system_prompt = self._PROMPT_MAP.get(document.doc_category, self._INDUSTRIAL_PROMPT)
+        print(f"  Using '{document.doc_category}' extraction prompt "
+              f"(domain: {document.doc_domain})")
+        sys.stdout.flush()
 
         # Window over the WHOLE document, not just the first 2000 chars, so
         # entities deep inside long manuals/reports are captured. Each window
@@ -102,7 +350,7 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
             try:
                 raw_response = self.llm.generate(
                     prompt=f"TEXT TO ANALYZE:\n{window}",
-                    system_prompt=self.system_prompt,
+                    system_prompt=system_prompt,
                     max_tokens=ExtractionConfig.MAX_TOKENS,
                 )
                 if not raw_response:
@@ -127,6 +375,10 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
         sys.stdout.flush()
 
         return document
+
+    # ------------------------------------------------------------------
+    # Text windowing
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _make_windows(text: str, size: int, overlap: int, max_windows: int) -> List[str]:
@@ -154,12 +406,6 @@ Output ONLY a valid JSON object, no explanations, no markdown fences:
     # ------------------------------------------------------------------
     # Cross-document entity resolution
     # ------------------------------------------------------------------
-
-    # Canonical entity types (upper snake) the graph is built around.
-    _KNOWN_TYPES = {
-        "EQUIPMENT", "COMPONENT", "PROCESS_PARAMETER", "FAILURE", "PROCEDURE",
-        "REGULATION", "PERSONNEL", "MATERIAL", "LOCATION", "DATE",
-    }
 
     @staticmethod
     def _normalize_name(name: str) -> str:
