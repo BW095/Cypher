@@ -146,6 +146,30 @@ async def remove_folder(req: IngestStopRequest):
 
 
 # -------------------------------------------------------------------------
+# POST /api/ingest/flush-caches — drop in-memory retrieval caches
+# -------------------------------------------------------------------------
+@router.post("/flush-caches")
+async def flush_caches():
+    """Invalidate the running backend's in-memory retrieval caches.
+
+    The graph retriever caches entity names and document paths for ~60s
+    (see Neo4jStorage). An external reset (clear.py) wipes the databases in
+    a separate process, so those caches keep the just-deleted files
+    'alive' until the TTL lapses — which shows up as chat referencing
+    documents that no longer exist. clear.py calls this best-effort right
+    after wiping so a full backend restart isn't required for a clean state.
+    """
+    pipeline, _ = get_deps()
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not ready")
+    try:
+        pipeline.neo4j_db.invalidate_entity_cache()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cache flush failed: {e}")
+    return {"status": "flushed"}
+
+
+# -------------------------------------------------------------------------
 # GET /api/ingest/status — overall ingestion statistics
 # -------------------------------------------------------------------------
 @router.get("/status", response_model=IngestStatus)

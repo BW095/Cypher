@@ -133,6 +133,16 @@ function Message({ msg }) {
           msg.content
         )}
       </div>
+      {msg.role === 'user' && msg.attachments?.length > 0 && (
+        <div className="msg-attachments">
+          {msg.attachments.map((name) => (
+            <span className="msg-attachment" key={name} title={name}>
+              <IconFile size={12} />
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
       {isAssistant && !msg.streaming && <Sources sources={msg.sources} />}
     </div>
   )
@@ -197,6 +207,9 @@ export default function ChatView({ sessionId, onSessionCreated }) {
   const [dragOver, setDragOver]       = useState(false)
   const [uploadItems, setUploadItems] = useState([])   // {file, status, reason?}
   const [uploading, setUploading]     = useState(false)
+  // Files uploaded during this chat session; sent as `attachments` with every
+  // message so the current conversation keeps referencing them.
+  const [sessionFiles, setSessionFiles] = useState([]) // {name, path}
 
   const threadRef   = useRef(null)
   const textareaRef = useRef(null)
@@ -204,12 +217,23 @@ export default function ChatView({ sessionId, onSessionCreated }) {
   const skipLoadRef = useRef(null)
   const fileInputRef = useRef(null)
   const dragCounter = useRef(0)   // track nested drag-enter/leave
+  const shownAttachRef = useRef(new Set())  // attachment paths already shown in a message bubble
 
   // ── Session history load ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
-    if (!sessionId) { setMessages([]); return }
+    if (!sessionId) {
+      // New chat — drop everything, including any pending uploads.
+      setMessages([]); setUploadItems([]); setSessionFiles([])
+      shownAttachRef.current = new Set()
+      return
+    }
+    // Session id just assigned to the chat we already uploaded into — keep the
+    // attachments and pills so the ongoing conversation still references them.
     if (sessionId === skipLoadRef.current) { skipLoadRef.current = null; return }
+    // Switched to a different existing session — its attachments don't apply.
+    setUploadItems([]); setSessionFiles([])
+    shownAttachRef.current = new Set()
     api.sessionHistory(sessionId)
       .then((data) => {
         if (!cancelled)
@@ -284,13 +308,25 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     const question = (text ?? input).trim()
     if (!question || busy) return
 
+    // Every uploaded file in this session is sent as context. Files not yet
+    // shown in a bubble get a chip on this message so the user sees what the
+    // question is attached to.
+    const attachmentPaths = sessionFiles.map((f) => f.path)
+    const freshAttachments = sessionFiles
+      .filter((f) => !shownAttachRef.current.has(f.path))
+      .map((f) => f.name)
+    sessionFiles.forEach((f) => shownAttachRef.current.add(f.path))
+
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: question },
+      { role: 'user', content: question, attachments: freshAttachments },
       { role: 'assistant', content: '', streaming: true },
     ])
+    // The files are now "in" the conversation — drop the transient upload pills
+    // so the drop/progress row doesn't linger over later messages.
+    setUploadItems([])
     setBusy(true)
 
     const patchLast = (patch) =>
@@ -308,6 +344,7 @@ export default function ChatView({ sessionId, onSessionCreated }) {
     try {
       await api.askStream(question, sessionId, {
         signal: controller.signal,
+        attachments: attachmentPaths,
         onSession: (sid) => {
           if (!sessionId && sid) { skipLoadRef.current = sid; onSessionCreated(sid) }
         },
@@ -364,6 +401,18 @@ export default function ChatView({ sessionId, onSessionCreated }) {
           return srv ? { ...item, ...srv } : { ...item, status: 'queued' }
         })
       })
+
+      // Remember each saved file so it can be attached as context for this
+      // session's messages. The server returns an absolute `path` per file.
+      const newFiles = (result.results ?? [])
+        .filter((r) => r.path)
+        .map((r) => ({ name: r.file, path: r.path }))
+      if (newFiles.length) {
+        setSessionFiles((prev) => {
+          const seen = new Set(prev.map((f) => f.path))
+          return [...prev, ...newFiles.filter((f) => !seen.has(f.path))]
+        })
+      }
     } catch (err) {
       // HTTP-level failure (503, network error, etc.) — mark all pending as failed
       const detail = err.message || 'Upload failed'

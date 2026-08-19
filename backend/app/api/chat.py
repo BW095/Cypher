@@ -57,6 +57,7 @@ async def send_message(req: ChatRequest):
     result = query_engine.query(
         user_message=req.user_message,
         chat_history=chat_history if chat_history else None,
+        attachments=req.attachments or None,
     )
 
     # Save the assistant response (persist enough to rebuild the UI on reload)
@@ -122,6 +123,7 @@ async def send_message_stream(req: ChatRequest):
             for ev in query_engine.query_stream(
                 user_message=req.user_message,
                 chat_history=chat_history if chat_history else None,
+                attachments=req.attachments or None,
             ):
                 if ev.get("type") == "token":
                     yield _sse({"type": "token", "text": ev["text"]})

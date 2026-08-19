@@ -91,13 +91,67 @@ def _clear_neo4j():
         print(f"  ❌ Failed to clear Neo4j: {e}")
 
 
+def _clear_uploads():
+    """Delete every file uploaded through the chat/upload API.
+
+    Uploaded documents are saved under data/uploads/ and ingested into the
+    stores above. Wiping only the databases leaves these source files on
+    disk, so a 'reset' still shows uploaded files sitting in the folder.
+    """
+    from app.api.upload import UPLOAD_DIR
+
+    if not os.path.isdir(UPLOAD_DIR):
+        return
+    removed = 0
+    for name in os.listdir(UPLOAD_DIR):
+        p = os.path.join(UPLOAD_DIR, name)
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+            removed += 1
+        except OSError as e:
+            print(f"  ⚠️  Could not remove {p}: {e}")
+    print(f"  ✅ Cleared uploads directory ({removed} item(s) removed).")
+
+
+def _flush_backend_caches():
+    """Best-effort: tell a running backend to drop its in-memory caches.
+
+    The graph retriever caches entity names / document paths for ~60s. Since
+    this script wipes the databases from a separate process, those caches keep
+    the just-deleted files 'alive' until the TTL lapses — the chat then still
+    references documents that no longer exist. Hitting this endpoint clears the
+    caches immediately, so no backend restart is needed. Silently ignored if
+    the backend isn't running.
+    """
+    import json
+    import urllib.request
+    from app.config import ServerConfig
+
+    host = os.getenv("SERVER_HOST", "127.0.0.1")
+    if host in ("0.0.0.0", ""):
+        host = "127.0.0.1"
+    url = f"http://{host}:{ServerConfig.PORT}/api/ingest/flush-caches"
+    try:
+        req = urllib.request.Request(url, data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            json.loads(resp.read() or b"{}")
+        print("  ✅ Flushed running backend's in-memory caches.")
+    except Exception:
+        print("  ℹ️  Backend not reachable — restart it to clear in-memory caches.")
+
+
 def purge_databases():
     print("🧹 Full reset — wiping all databases and caches for a fresh start...")
     _clear_sqlite()
     _clear_qdrant()
     _clear_neo4j()
+    _clear_uploads()
+    _flush_backend_caches()
     print("--------------------------------------------------")
-    print("✨ Reset complete. Restart the backend to clear in-memory caches too.")
+    print("✨ Reset complete.")
 
 
 if __name__ == "__main__":

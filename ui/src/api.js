@@ -29,17 +29,25 @@ export const api = {
   health: () => fetch('/api/health').then(handle),
 
   // Chat
-  ask: (user_message, sessionId) =>
-    post('/api/chat', { user_message, session_id: sessionId || null }),
+  ask: (user_message, sessionId, attachments) =>
+    post('/api/chat', {
+      user_message,
+      session_id: sessionId || null,
+      attachments: attachments?.length ? attachments : null,
+    }),
 
   // Streaming chat over Server-Sent Events. Calls the provided callbacks as
   // events arrive; resolves when the stream ends, rejects on error.
   //   onSession(sessionId) · onToken(text) · onDone({answer, sources, ...})
-  async askStream(user_message, sessionId, { onSession, onToken, onDone, signal } = {}) {
+  async askStream(user_message, sessionId, { onSession, onToken, onDone, signal, attachments } = {}) {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_message, session_id: sessionId || null }),
+      body: JSON.stringify({
+        user_message,
+        session_id: sessionId || null,
+        attachments: attachments?.length ? attachments : null,
+      }),
       signal,
     })
     if (!res.ok || !res.body) {

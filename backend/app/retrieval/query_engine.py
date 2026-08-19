@@ -47,7 +47,8 @@ CITATION RULES (mandatory):
 - End your response with a "**Sources:**" section that lists each unique file cited as a bullet point.
 
 ANSWER RULES:
-- Use ONLY the provided context. Never make up facts, values, tag numbers, dates, or monetary amounts.
+- Ground every factual claim about documents in the provided context. Never make up facts, values, tag numbers, dates, or monetary amounts.
+- You DO have access to the conversation so far. Use earlier messages to resolve pronouns and follow-up references ("it", "that certificate", "the same vendor"), and answer questions about the conversation itself (e.g. "what did I just ask?") directly from the chat history — such answers need no document citations.
 - Be precise with technical details: equipment tags, parameter values, units, standard/regulation numbers, invoice amounts, certificate numbers, party names, and jurisdiction references must be copied exactly.
 - If the context is insufficient or conflicting, say exactly what is missing or conflicting — do not guess. Provide a confidence assessment when appropriate.
 - When relevant, add a short "**Recommendation:**" with concrete next actions (inspection, maintenance, compliance step, payment action, renewal reminder).
@@ -83,6 +84,27 @@ For EVERY regulation or compliance requirement identified in the context:
    - A **recommended action** with urgency (Immediate / Within 30 days / Routine).
 
 Write in formal government audit language. Do not invent regulations, amounts, dates, or document names not present in the provided context."""
+
+# Words that suggest a message depends on earlier conversation ("what about it",
+# "is that still valid", "now?"). Used to decide when a follow-up needs to be
+# rewritten into a standalone question before retrieval.
+_FOLLOWUP_HINTS = re.compile(
+    r"\b(it|its|that|this|these|those|they|them|their|he|she|his|her|him|"
+    r"same|one|ones|above|previous|earlier|before|again|also|too|another|"
+    r"else|other|there|now|so|and)\b",
+    re.IGNORECASE,
+)
+
+# Phrases where the user points at "this/the uploaded file" rather than naming
+# it. When such a message arrives with session attachments, we answer from those
+# attached files only, so "what is this file about?" describes the just-uploaded
+# document instead of some unrelated knowledge-base hit.
+_DEICTIC_FILE_RE = re.compile(
+    r"\b(this|that|the|uploaded|attached|current|above)\s+"
+    r"(file|files|document|documents|doc|image|images|photo|picture|pic|"
+    r"pdf|report|certificate|attachment|upload)\b",
+    re.IGNORECASE,
+)
 
 # Keywords that trigger the audit persona injection
 _AUDIT_KEYWORDS = (
@@ -137,35 +159,117 @@ class QueryEngine:
                 hits.append(p)
         return hits
 
-    def _vector_retrieve(self, user_message: str) -> list[dict]:
-        """Vector retrieval, plus 'pinned' chunks from any file the user names
-        explicitly (so referenced documents are always in context)."""
+    def _condense_query(self, user_message: str, chat_history: list[dict] | None) -> str:
+        """Rewrite a follow-up message into a standalone search query.
+
+        Retrieval embeds the user message on its own, so a follow-up like
+        "what is it valid until?" finds nothing — the referent lives in the
+        chat history. When the message looks history-dependent, ask the LLM
+        to fold the missing context back in. Returns the original message
+        whenever rewriting isn't needed or fails.
+        """
+        if not chat_history:
+            return user_message
+
+        # Long messages without anaphora are almost always self-contained —
+        # skip the extra LLM round-trip for them.
+        if len(user_message.split()) > 25 or not _FOLLOWUP_HINTS.search(user_message):
+            return user_message
+
+        recent = chat_history[-6:]  # last 3 user/assistant turns
+        transcript = "\n".join(
+            f"{m.get('role', 'user')}: {(m.get('content') or '')[:400]}"
+            for m in recent
+        )
+        prompt = f"""Given this conversation:
+
+{transcript}
+
+Rewrite the user's latest message into ONE standalone question that contains all the context needed to understand it without the conversation (resolve pronouns like "it"/"that" to the actual subject). Keep it short. If the message is already self-contained, return it unchanged. Return ONLY the rewritten question, nothing else.
+
+Latest message: {user_message}"""
+
+        try:
+            raw = self.llm.generate(
+                prompt,
+                system_prompt="You rewrite follow-up questions into standalone search queries. Reply with the rewritten question only.",
+                max_tokens=96,
+            )
+        except Exception as e:
+            print(f"[QueryEngine] Query condensation failed, using raw message: {e}")
+            return user_message
+
+        rewritten = self._clean_answer(raw).strip().strip('"').strip()
+        # Guard against a chatty or runaway rewrite — fall back to the original.
+        if not rewritten or len(rewritten) > 300 or "\n" in rewritten:
+            return user_message
+        if rewritten.lower() != user_message.lower():
+            print(f"[QueryEngine] Condensed follow-up for retrieval: '{rewritten}'")
+        return rewritten
+
+    def _vector_retrieve(self, user_message: str,
+                         attachments: list[str] | None = None) -> list[dict]:
+        """Vector retrieval, prioritising files the user is asking about.
+
+        Priority order for pinned context:
+          1. `attachments` — files uploaded in this chat session.
+          2. Any file whose name literally appears in the query text.
+
+        When the message just points at "this/the uploaded file" and there are
+        attachments, retrieval is *scoped* to those files only, so a deictic
+        question resolves to the attachment instead of an unrelated KB hit.
+        """
+        attachments = [a for a in (attachments or []) if a]
+
+        # Deictic + attachments → answer from the attached file(s) alone.
+        if attachments and _DEICTIC_FILE_RE.search(user_message):
+            scoped: list[dict] = []
+            seen: set = set()
+            for src in attachments[:3]:
+                for c in self.vector_retriever.retrieve(
+                        user_message, top_k=8, source_path=src):
+                    key = (c.get("source"), (c.get("text") or "")[:80])
+                    if key not in seen:
+                        seen.add(key)
+                        scoped.append(c)
+            if scoped:
+                print(f"[QueryEngine] Attachment-scoped retrieval to "
+                      f"{[os.path.basename(a) for a in attachments[:3]]} "
+                      f"({len(scoped)} chunk(s)).")
+                return scoped
+            # Nothing indexed yet (ingestion may still be running) — fall through
+            # to normal retrieval + pinning below.
+
         chunks = self.vector_retriever.retrieve(user_message)
 
-        refs = self._referenced_sources(user_message)
+        # Pin attachments first, then any explicitly-named files.
+        refs = list(dict.fromkeys(attachments + self._referenced_sources(user_message)))
         if not refs:
             return chunks
 
         seen = {(c.get("source"), (c.get("text") or "")[:80]) for c in chunks}
         pinned = []
         for src in refs[:3]:  # cap in case a query name matches many files
-            for c in self.vector_retriever.retrieve(user_message, top_k=3, source_path=src):
+            top_k = 6 if src in attachments else 3  # give attachments more room
+            for c in self.vector_retriever.retrieve(user_message, top_k=top_k, source_path=src):
                 key = (c.get("source"), (c.get("text") or "")[:80])
                 if key not in seen:
                     seen.add(key)
                     pinned.append(c)
         if pinned:
-            print(f"[QueryEngine] Pinned {len(pinned)} chunk(s) from referenced "
-                  f"file(s): {[os.path.basename(s) for s in refs[:3]]}")
+            print(f"[QueryEngine] Pinned {len(pinned)} chunk(s) from "
+                  f"{[os.path.basename(s) for s in refs[:3]]}.")
             return pinned + chunks  # referenced-file content first
         return chunks
 
-    def query(self, user_message: str, chat_history: list[dict] | None = None) -> dict:
+    def query(self, user_message: str, chat_history: list[dict] | None = None,
+              attachments: list[str] | None = None) -> dict:
         """Process a user query through the full pipeline.
 
         Args:
             user_message: The user's question.
             chat_history: Previous messages as [{role, content}, ...] for context.
+            attachments: Paths of files uploaded in this session to prioritise.
 
         Returns:
             {
@@ -179,15 +283,24 @@ class QueryEngine:
         print(f"{'='*60}")
         sys.stdout.flush()
 
+        # 0. Fold chat history into follow-up questions so retrieval works.
+        #    Deictic-with-attachments questions ("what is this file about?")
+        #    stay verbatim — condensing would strip the "this file" cue the
+        #    attachment-scoped retrieval keys on.
+        if attachments and _DEICTIC_FILE_RE.search(user_message):
+            search_query = user_message
+        else:
+            search_query = self._condense_query(user_message, chat_history)
+
         # 1. Vector retrieval — semantic search
         print("\n[QueryEngine] Step 1: Vector retrieval...")
         sys.stdout.flush()
-        vector_chunks = self._vector_retrieve(user_message)
+        vector_chunks = self._vector_retrieve(search_query, attachments=attachments)
 
         # 2. Graph retrieval — entity-based search
         print("\n[QueryEngine] Step 2: Graph retrieval...")
         sys.stdout.flush()
-        graph_context = self.graph_retriever.retrieve(user_message)
+        graph_context = self.graph_retriever.retrieve(search_query)
 
         # 3. Build context
         print("\n[QueryEngine] Step 3: Building context...")
@@ -195,7 +308,7 @@ class QueryEngine:
         context = self.context_builder.build(vector_chunks, graph_context)
 
         # 4. Build the full message list for the LLM
-        messages = self._build_messages(user_message, context, chat_history)
+        messages = self._build_messages(user_message, context, chat_history, attachments)
 
         # 5. Generate answer
         print("\n[QueryEngine] Step 4: Generating answer with LLM...")
@@ -230,7 +343,8 @@ class QueryEngine:
             "confidence": confidence,
         }
 
-    def query_stream(self, user_message: str, chat_history: list[dict] | None = None):
+    def query_stream(self, user_message: str, chat_history: list[dict] | None = None,
+                     attachments: list[str] | None = None):
         """Streaming version of query().
 
         Runs retrieval + context building the same way, then streams the LLM
@@ -246,10 +360,14 @@ class QueryEngine:
         sys.stdout.flush()
 
         # 1-3. Retrieval + context (identical to query())
-        vector_chunks = self._vector_retrieve(user_message)
-        graph_context = self.graph_retriever.retrieve(user_message)
+        if attachments and _DEICTIC_FILE_RE.search(user_message):
+            search_query = user_message
+        else:
+            search_query = self._condense_query(user_message, chat_history)
+        vector_chunks = self._vector_retrieve(search_query, attachments=attachments)
+        graph_context = self.graph_retriever.retrieve(search_query)
         context = self.context_builder.build(vector_chunks, graph_context)
-        messages = self._build_messages(user_message, context, chat_history)
+        messages = self._build_messages(user_message, context, chat_history, attachments)
 
         # 4. Stream the answer, accumulating the raw text.
         print("[QueryEngine] Streaming answer with LLM...")
@@ -340,6 +458,7 @@ class QueryEngine:
         user_message: str,
         context: str,
         chat_history: list[dict] | None,
+        attachments: list[str] | None = None,
     ) -> list[dict]:
         """Assemble the full message list for the LLM.
 
@@ -384,8 +503,22 @@ class QueryEngine:
                 "and explicitly note if no expiry date was found in the context.\n"
             )
 
+        # When files are attached to this chat, tell the model that deictic
+        # references ("this file", "the document") mean those files, so it
+        # answers about the upload rather than an unrelated knowledge-base hit.
+        attach_hint = ""
+        attach_names = [os.path.basename(a) for a in (attachments or []) if a]
+        if attach_names:
+            attach_hint = (
+                "\n📎 The user has attached the following file(s) to this chat: "
+                f"{', '.join(attach_names)}. When they say \"this file\", \"the "
+                "document\", \"the image\", or similar, they mean these attached "
+                "file(s) — answer about them and cite them by name.\n"
+            )
+
         user_content = f"""Based on the following context from the company's knowledge base, answer the user's question.
-Remember: cite the exact file name in square brackets after every claim, and finish with a **Sources:** line.{expiry_hint}
+If the question refers back to something discussed earlier in this conversation, use the conversation history above to interpret it.
+Remember: cite the exact file name in square brackets after every claim, and finish with a **Sources:** line.{attach_hint}{expiry_hint}
 
 {context}
 

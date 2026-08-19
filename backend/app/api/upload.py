@@ -214,7 +214,9 @@ async def upload_files(
 
         _run_ingestion(dest, pipeline)
         queued += 1
-        results.append({"file": filename, "status": "queued"})
+        # Return the saved absolute path so the client can attach this file as
+        # context for the current chat session.
+        results.append({"file": filename, "status": "queued", "path": dest})
 
     rejected = sum(1 for r in results if r["status"] == "rejected")
 

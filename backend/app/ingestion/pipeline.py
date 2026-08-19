@@ -90,14 +90,23 @@ class IngestionPipeline:
                       f"for {file_path} (very large document).")
                 chunks = chunks[:_MAX_CHUNKS_PER_DOC]
 
-            if chunks:
-                # 4. Generate Embeddings
-                chunk_texts = [chunk["text"] for chunk in chunks]
-                embeddings = self.embedding_model.embed_batch(chunk_texts)
+            if not chunks:
+                # Nothing extractable — every downstream store would be empty.
+                # Mark the file failed so the UI doesn't claim it's searchable.
+                self.tracker.add_or_update_document(
+                    canonical_doc.file_path, canonical_doc.file_type, "failed")
+                print(f"No text could be extracted from {file_path} — "
+                      f"marked as failed (nothing to index).")
+                sys.stdout.flush()
+                return
 
-                # 5. Store in Vector DB
-                self.qdrant_db.store_chunks(chunks, embeddings)
-                canonical_doc = self.entity_extractor.process_document(canonical_doc)
+            # 4. Generate Embeddings
+            chunk_texts = [chunk["text"] for chunk in chunks]
+            embeddings = self.embedding_model.embed_batch(chunk_texts)
+
+            # 5. Store in Vector DB
+            self.qdrant_db.store_chunks(chunks, embeddings)
+            canonical_doc = self.entity_extractor.process_document(canonical_doc)
 
             # 6. Store Entities and Relationships in Neo4j Graph
             self.neo4j_db.store_graph(canonical_doc)

@@ -15,6 +15,12 @@ class ChatRequest(BaseModel):
     """User sends a chat message."""
     user_message: str = Field(..., min_length=1, description="The user's question or prompt")
     session_id: Optional[str] = Field(None, description="Existing session ID. None creates a new session.")
+    attachments: Optional[List[str]] = Field(
+        None,
+        description="Absolute paths of files uploaded in this chat session, to "
+                    "prioritise as context for the answer (so 'what is this file "
+                    "about?' resolves to the just-uploaded document).",
+    )
 
 
 class SourceReference(BaseModel):
