@@ -1,13 +1,14 @@
 """
-Text LLM interface — Amazon Bedrock (Claude) backend.
+Text LLM interface — Amazon Bedrock backend.
 
-Replaces the local GGUF/llama.cpp ModelManager with boto3 calls to
-Amazon Bedrock. The public API (generate / generate_with_history /
-generate_with_history_stream) is unchanged, so QueryEngine and
-EntityExtractor work without modification.
+Uses the Bedrock **Converse API** which works uniformly with all models:
+  - Amazon Nova Pro / Nova Lite  (no Anthropic form needed)
+  - Anthropic Claude 3.5 Haiku  (needs Anthropic FTU form once)
+  - Any other Converse-compatible model
+
+Switch models via BEDROCK_CHAT_MODEL_ID env var without code changes.
 """
 
-import json
 import boto3
 
 from app.config import BedrockConfig
@@ -30,26 +31,26 @@ class LLMWrapper:
     def generate(self, prompt: str, system_prompt: str = "You are a helpful AI assistant.",
                  max_tokens: int = None) -> str:
         """Single-turn generation. Returns '' on failure."""
-        return self._chat(
-            messages=[{"role": "user", "content": prompt}],
+        return self._converse(
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
             system_prompt=system_prompt,
             max_tokens=max_tokens or BedrockConfig.MAX_TOKENS,
         )
 
     def generate_with_history(self, messages: list[dict], max_tokens: int = None) -> str:
         """Multi-turn generation with a full message history. '' on failure."""
-        system_prompt, chat_messages = self._split_system(messages)
-        return self._chat(
-            messages=chat_messages,
+        system_prompt, converse_messages = self._split_system(messages)
+        return self._converse(
+            messages=converse_messages,
             system_prompt=system_prompt,
             max_tokens=max_tokens or BedrockConfig.MAX_TOKENS,
         )
 
     def generate_with_history_stream(self, messages: list[dict], max_tokens: int = None):
         """Streaming variant — yields text chunks."""
-        system_prompt, chat_messages = self._split_system(messages)
-        yield from self._chat_stream(
-            messages=chat_messages,
+        system_prompt, converse_messages = self._split_system(messages)
+        yield from self._converse_stream(
+            messages=converse_messages,
             system_prompt=system_prompt,
             max_tokens=max_tokens or BedrockConfig.MAX_TOKENS,
         )
@@ -70,75 +71,90 @@ class LLMWrapper:
 
     @staticmethod
     def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
-        """Separate the system message from the chat messages.
-
-        Claude's Messages API takes system as a top-level param, not in
-        the messages list.
-        """
+        """Separate the system message from the chat messages and convert to
+        Converse API format (content must be a list of blocks, not a string)."""
         system = ""
         chat = []
         for m in messages:
             if m.get("role") == "system":
                 system = m.get("content", "")
             else:
-                chat.append(m)
-        # Claude requires messages to start with "user" and alternate.
-        # Merge consecutive same-role messages if the history is malformed.
+                content = m.get("content", "")
+                # Converse API requires content as a list of blocks
+                if isinstance(content, str):
+                    chat.append({"role": m["role"], "content": [{"text": content}]})
+                elif isinstance(content, list):
+                    # Already a list — ensure it's in Converse block format
+                    blocks = []
+                    for block in content:
+                        if isinstance(block, str):
+                            blocks.append({"text": block})
+                        elif isinstance(block, dict):
+                            if "text" in block:
+                                blocks.append({"text": block["text"]})
+                            elif block.get("type") == "image":
+                                # Convert Claude-style image block to Converse format
+                                src = block.get("source", {})
+                                blocks.append({
+                                    "image": {
+                                        "format": src.get("media_type", "image/jpeg").split("/")[-1],
+                                        "source": {
+                                            "bytes": src.get("data", b""),
+                                        },
+                                    }
+                                })
+                    chat.append({"role": m["role"], "content": blocks})
+                else:
+                    chat.append({"role": m["role"], "content": [{"text": str(content)}]})
+
+        # Converse requires strict user/assistant alternation, starting with user
         chat = _merge_consecutive(chat)
         return system, chat
 
-    def _chat(self, messages: list[dict], system_prompt: str = "",
-              max_tokens: int = 1024) -> str:
-        """Blocking chat completion via Bedrock invoke_model."""
+    def _converse(self, messages: list[dict], system_prompt: str = "",
+                  max_tokens: int = 1024) -> str:
+        """Blocking chat completion via Bedrock Converse API."""
         if not messages:
             return ""
         try:
-            body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": BedrockConfig.TEMPERATURE,
-                "messages": _format_messages(messages),
+            kwargs = {
+                "modelId": self.model_id,
+                "messages": messages,
+                "inferenceConfig": {
+                    "maxTokens": max_tokens,
+                    "temperature": BedrockConfig.TEMPERATURE,
+                },
             }
             if system_prompt:
-                body["system"] = system_prompt
+                kwargs["system"] = [{"text": system_prompt}]
 
-            response = self.client.invoke_model(
-                modelId=self.model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body),
-            )
-            result = json.loads(response["body"].read())
-            return _extract_text(result)
+            response = self.client.converse(**kwargs)
+            return _extract_text_converse(response)
         except Exception as e:
             print(f"[Bedrock LLM] Error: {e}")
             return ""
 
-    def _chat_stream(self, messages: list[dict], system_prompt: str = "",
-                     max_tokens: int = 1024):
-        """Streaming chat completion via Bedrock invoke_model_with_response_stream."""
+    def _converse_stream(self, messages: list[dict], system_prompt: str = "",
+                         max_tokens: int = 1024):
+        """Streaming chat completion via Bedrock Converse Stream API."""
         if not messages:
             return
         try:
-            body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": BedrockConfig.TEMPERATURE,
-                "messages": _format_messages(messages),
+            kwargs = {
+                "modelId": self.model_id,
+                "messages": messages,
+                "inferenceConfig": {
+                    "maxTokens": max_tokens,
+                    "temperature": BedrockConfig.TEMPERATURE,
+                },
             }
             if system_prompt:
-                body["system"] = system_prompt
+                kwargs["system"] = [{"text": system_prompt}]
 
-            response = self.client.invoke_model_with_response_stream(
-                modelId=self.model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body),
-            )
-            for event in response["body"]:
-                chunk = json.loads(event["chunk"]["bytes"])
-                if chunk.get("type") == "content_block_delta":
-                    delta = chunk.get("delta", {})
+            response = self.client.converse_stream(**kwargs)
+            for event in response["stream"]:
+                if "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
                     text = delta.get("text", "")
                     if text:
                         yield text
@@ -150,57 +166,35 @@ class LLMWrapper:
 # Module-level helpers
 # ------------------------------------------------------------------
 
-def _format_messages(messages: list[dict]) -> list[dict]:
-    """Convert messages to the Claude Messages API format.
-
-    Each message content can be a string or a list of content blocks
-    (for multimodal). This normalizes both.
-    """
-    formatted = []
-    for m in messages:
-        content = m.get("content", "")
-        role = m.get("role", "user")
-        if role not in ("user", "assistant"):
-            role = "user"
-        # If content is already a list (multimodal), keep it
-        if isinstance(content, list):
-            formatted.append({"role": role, "content": content})
-        else:
-            formatted.append({"role": role, "content": str(content)})
-    return formatted
-
-
 def _merge_consecutive(messages: list[dict]) -> list[dict]:
     """Merge consecutive messages with the same role.
 
-    Claude requires strict user/assistant alternation. If the history
-    has consecutive user or assistant messages, merge them.
+    Converse API requires strict user/assistant alternation.
     """
     if not messages:
         return []
     merged = [messages[0].copy()]
     for m in messages[1:]:
         if m["role"] == merged[-1]["role"]:
-            # Merge content
-            prev = merged[-1].get("content", "")
-            curr = m.get("content", "")
-            if isinstance(prev, str) and isinstance(curr, str):
-                merged[-1]["content"] = prev + "\n\n" + curr
-            else:
-                merged[-1]["content"] = str(prev) + "\n\n" + str(curr)
+            # Merge content blocks
+            prev_content = merged[-1].get("content", [])
+            curr_content = m.get("content", [])
+            merged[-1]["content"] = prev_content + curr_content
         else:
             merged.append(m.copy())
     # Ensure starts with user
     if merged and merged[0].get("role") != "user":
-        merged.insert(0, {"role": "user", "content": "(continuing conversation)"})
+        merged.insert(0, {"role": "user", "content": [{"text": "(continuing conversation)"}]})
     return merged
 
 
-def _extract_text(response: dict) -> str:
-    """Extract text from a Claude Messages API response."""
-    content = response.get("content", [])
-    parts = []
-    for block in content:
-        if block.get("type") == "text":
-            parts.append(block.get("text", ""))
-    return "\n".join(parts).strip()
+def _extract_text_converse(response: dict) -> str:
+    """Extract text from a Bedrock Converse API response."""
+    try:
+        output = response.get("output", {})
+        message = output.get("message", {})
+        content = message.get("content", [])
+        parts = [block.get("text", "") for block in content if "text" in block]
+        return "\n".join(parts).strip()
+    except Exception:
+        return ""

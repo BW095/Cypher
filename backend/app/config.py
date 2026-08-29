@@ -49,17 +49,19 @@ class SQLiteConfig:
 class BedrockConfig:
     REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
-    # Main chat model — Claude 3.5 Haiku (vision-capable, cost-effective)
+    # Main chat model — Amazon Nova Pro (no Marketplace form needed, cost-effective)
+    # Switch to Claude 3.5 Haiku once Anthropic FTU form is submitted:
+    #   us.anthropic.claude-3-5-haiku-20241022-v1:0
     CHAT_MODEL_ID: str = os.getenv(
         "BEDROCK_CHAT_MODEL_ID",
-        "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "us.amazon.nova-pro-v1:0",
     )
-    # Entity extraction model — same Haiku for cost savings
+    # Entity extraction — Nova Lite is fast and cheap for structured extraction
     EXTRACTION_MODEL_ID: str = os.getenv(
         "BEDROCK_EXTRACTION_MODEL_ID",
-        "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "us.amazon.nova-lite-v1:0",
     )
-    # Embedding model — Titan Embed Text v2
+    # Embedding model — Titan Embed Text v2 (Amazon-native, no form needed)
     EMBED_MODEL_ID: str = os.getenv(
         "BEDROCK_EMBED_MODEL_ID",
         "amazon.titan-embed-text-v2:0",

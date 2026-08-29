@@ -1,17 +1,22 @@
 """
-Vision model interface — Amazon Bedrock (Claude 3.5 Haiku with vision).
+Vision model interface — Amazon Bedrock (Converse API).
 
-Replaces the local Qwen3VL + CLIP projector with Bedrock Claude's
-multimodal API. Same analyze_image(path, prompt) interface.
+Uses the Converse API which works with both:
+  - Amazon Nova Pro  (default, no Anthropic form needed)
+  - Anthropic Claude 3.5 Haiku  (override with BEDROCK_CHAT_MODEL_ID)
+
+Same analyze_image(path, prompt) interface as before.
 """
 
 import base64
-import json
 import mimetypes
 
 import boto3
 
 from app.config import BedrockConfig
+
+# Converse-supported image formats
+_SUPPORTED_FORMATS = {"jpeg", "png", "gif", "webp"}
 
 
 class QwenVLWrapper:
@@ -23,7 +28,7 @@ class QwenVLWrapper:
 
     def __init__(self, model_path=None, clip_path=None):
         # model_path / clip_path kept for API compat; ignored
-        self.model_id = BedrockConfig.CHAT_MODEL_ID  # Claude Haiku supports vision
+        self.model_id = BedrockConfig.CHAT_MODEL_ID
         self._client = None
 
     @property
@@ -37,22 +42,17 @@ class QwenVLWrapper:
 
     def analyze_image(self, image_path: str, prompt: str,
                       max_tokens: int = 512) -> str:
-        """Describe an image using Claude's vision capability. Returns '' on failure."""
-        print(f"Analyzing image with Bedrock Vision: {image_path}")
+        """Describe an image using Bedrock Converse vision. Returns '' on failure."""
+        print(f"Analyzing image with Bedrock Vision ({self.model_id}): {image_path}")
         try:
             with open(image_path, "rb") as f:
                 image_bytes = f.read()
 
-            # Detect MIME type
+            # Detect image format
             mime_type, _ = mimetypes.guess_type(image_path)
-            if not mime_type or not mime_type.startswith("image/"):
-                mime_type = "image/jpeg"
-            # Claude accepts: image/jpeg, image/png, image/gif, image/webp
-            media_type = mime_type if mime_type in (
-                "image/jpeg", "image/png", "image/gif", "image/webp"
-            ) else "image/jpeg"
-
-            encoded = base64.b64encode(image_bytes).decode("utf-8")
+            ext = (mime_type or "image/jpeg").split("/")[-1].lower()
+            if ext not in _SUPPORTED_FORMATS:
+                ext = "jpeg"
 
             system_prompt = (
                 "You are an industrial inspection assistant. You describe "
@@ -62,46 +62,32 @@ class QwenVLWrapper:
                 "You never invent details that are not visible."
             )
 
-            body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": 0.1,
-                "system": system_prompt,
-                "messages": [
+            response = self.client.converse(
+                modelId=self.model_id,
+                system=[{"text": system_prompt}],
+                messages=[
                     {
                         "role": "user",
                         "content": [
                             {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": encoded,
-                                },
+                                "image": {
+                                    "format": ext,
+                                    "source": {"bytes": image_bytes},
+                                }
                             },
-                            {
-                                "type": "text",
-                                "text": prompt,
-                            },
+                            {"text": prompt},
                         ],
                     }
                 ],
-            }
-
-            response = self.client.invoke_model(
-                modelId=self.model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body),
+                inferenceConfig={
+                    "maxTokens": max_tokens,
+                    "temperature": 0.1,
+                },
             )
-            result = json.loads(response["body"].read())
 
-            # Extract text from response
-            content = result.get("content", [])
-            parts = []
-            for block in content:
-                if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
+            # Extract text from Converse response
+            content = response.get("output", {}).get("message", {}).get("content", [])
+            parts = [block.get("text", "") for block in content if "text" in block]
             return "\n".join(parts).strip()
 
         except Exception as e:
