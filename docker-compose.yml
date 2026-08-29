@@ -6,7 +6,7 @@ name: cypher
 #
 # Prerequisites:
 #   - AWS credentials (IAM role on EC2, or access keys in .env)
-#   - Bedrock model access enabled (Claude 3.5 Haiku + Titan Embed v2)
+#   - Bedrock model access enabled (Nova Pro + Titan Embed v2)
 #   - a .env file (copy from .env.cloud.example)
 
 services:
@@ -15,28 +15,20 @@ services:
     restart: unless-stopped
     volumes:
       - qdrant_data:/qdrant/storage
-    # Memory limit — safe on t3.small. Remove if using t3.medium+.
-    deploy:
-      resources:
-        limits:
-          memory: 512m
 
   neo4j:
     image: neo4j:5
     restart: unless-stopped
     environment:
       NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-please-change-me}"
-      NEO4J_PLUGINS: '["apoc"]'
-      # Heap limits — critical on 2GB instances
-      NEO4J_server_memory_heap_initial__size: "256m"
-      NEO4J_server_memory_heap_max__size: "512m"
-      NEO4J_server_memory_pagecache__size: "256m"
+      # APOC plugin removed — causes restart loop when download fails on first boot.
+      # The graph retriever uses basic Cypher queries that work without APOC.
+      # Heap tuned for m7i-flex.large (8 GB RAM).
+      NEO4J_server_memory_heap_initial__size: "512m"
+      NEO4J_server_memory_heap_max__size: "1g"
+      NEO4J_server_memory_pagecache__size: "512m"
     volumes:
       - neo4j_data:/data
-    deploy:
-      resources:
-        limits:
-          memory: 900m
 
   backend:
     build:
@@ -54,16 +46,17 @@ services:
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-please-change-me}"
       SQLITE_DB_PATH: /data/app.db
       UPLOAD_DIR: /data/uploads
-      # Amazon Bedrock
+      # Amazon Bedrock — leave blank to use IAM role on EC2 (recommended).
       AWS_REGION: "${AWS_REGION:-us-east-1}"
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
-      BEDROCK_CHAT_MODEL_ID: "${BEDROCK_CHAT_MODEL_ID:-}"
-      BEDROCK_EXTRACTION_MODEL_ID: "${BEDROCK_EXTRACTION_MODEL_ID:-}"
-      BEDROCK_EMBED_MODEL_ID: "${BEDROCK_EMBED_MODEL_ID:-}"
-      CORS_ORIGINS: "http://localhost:${WEB_PORT:-8080}"
+      # Model IDs — only pass if set in .env; otherwise Python config defaults apply.
+      # This avoids passing empty strings that override the Python-level defaults.
+      BEDROCK_CHAT_MODEL_ID: "${BEDROCK_CHAT_MODEL_ID:-us.amazon.nova-pro-v1:0}"
+      BEDROCK_EXTRACTION_MODEL_ID: "${BEDROCK_EXTRACTION_MODEL_ID:-us.amazon.nova-lite-v1:0}"
+      BEDROCK_EMBED_MODEL_ID: "${BEDROCK_EMBED_MODEL_ID:-amazon.titan-embed-text-v2:0}"
+      CORS_ORIGINS: "*"
     volumes:
-      # Documents to ingest. Track subfolders of /documents in the UI.
       - ${DOCUMENTS_DIR:-./documents}:/documents
       - backend_data:/data
 
@@ -75,7 +68,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-80}:80"
 
 volumes:
   qdrant_data:
