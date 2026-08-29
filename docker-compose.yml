@@ -21,12 +21,6 @@ services:
     restart: unless-stopped
     environment:
       NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-please-change-me}"
-      # APOC plugin removed — causes restart loop when download fails on first boot.
-      # The graph retriever uses basic Cypher queries that work without APOC.
-      # Heap tuned for m7i-flex.large (8 GB RAM).
-      NEO4J_server_memory_heap_initial__size: "512m"
-      NEO4J_server_memory_heap_max__size: "1g"
-      NEO4J_server_memory_pagecache__size: "512m"
     volumes:
       - neo4j_data:/data
 
