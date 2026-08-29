@@ -8,8 +8,9 @@ from app.ingestion.chunking import Chunker
 from app.ai.embeddings import BGEWrapper
 from app.storage.qdrant import QdrantStorage
 from app.storage.sqlite import SQLiteStorage
-from app.storage.neo4j import Neo4jStorage  # Ensure this is imported
+from app.storage.neo4j import Neo4jStorage
 from app.ai.entity_extractor import EntityExtractor
+from app.config import QdrantConfig, Neo4jConfig, SQLiteConfig
 
 
 # Hard ceiling on chunks per document (embedding is CPU-bound and serial).
@@ -29,10 +30,19 @@ class IngestionPipeline:
     def __init__(self):
         self.dispatcher = Dispatcher()
         self.chunker = Chunker()
-        self.tracker = SQLiteStorage()
+        self.tracker = SQLiteStorage(db_path=SQLiteConfig.DB_PATH)
         self.embedding_model = BGEWrapper()
-        self.qdrant_db = QdrantStorage()
-        self.neo4j_db = Neo4jStorage()
+        self.qdrant_db = QdrantStorage(
+            host=QdrantConfig.HOST,
+            port=QdrantConfig.PORT,
+            collection_name=QdrantConfig.COLLECTION_NAME,
+        )
+        self.neo4j_db = Neo4jStorage(
+            uri=Neo4jConfig.URI,
+            user=Neo4jConfig.USER,
+            password=Neo4jConfig.PASSWORD,
+            database=Neo4jConfig.DATABASE,
+        )
         self.entity_extractor = EntityExtractor()
     def process_file(self, file_path: str):
         try:
