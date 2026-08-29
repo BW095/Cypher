@@ -1,5 +1,6 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
+from app.config import QdrantConfig
 import uuid
 
 
@@ -7,7 +8,7 @@ class QdrantStorage:
     def __init__(self, host: str = "localhost", port: int = 6333, collection_name: str = "industrial_knowledge"):
         self.client = QdrantClient(host=host, port=port)
         self.collection_name = collection_name
-        self.vector_size = 768  # BAAI bge-base-en-v1.5 outputs 768 dimensions
+        self.vector_size = QdrantConfig.VECTOR_SIZE  # 1024 for Titan Embed v2
 
         self._init_collection()
 

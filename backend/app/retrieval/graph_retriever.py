@@ -48,8 +48,6 @@ class GraphRetriever:
         all_docs = []
         seen_node_ids = set()
         seen_edge_keys = set()
-        # The entities we actually matched (used for direct-mention doc filtering below)
-        direct_entity_ids = []
 
         for candidate in candidates:
             # Try exact entity match + traversal
@@ -67,39 +65,9 @@ class GraphRetriever:
                     seen_edge_keys.add(edge_key)
                     all_edges.append(edge)
 
-            # Fix 2: collect entity IDs that were DIRECTLY matched (start nodes),
-            # not the traversal neighbours — we'll use these for doc filtering.
-            try:
-                known = self.neo4j_db.get_all_entity_names()
-                for ent in known:
-                    if (ent.get("name") or "").lower() == candidate.lower():
-                        eid = ent.get("id")
-                        if eid and eid not in direct_entity_ids:
-                            direct_entity_ids.append(eid)
-            except Exception:
-                pass
-
-        # Fix 2: fetch source documents only for directly-matched entities,
-        # not for all traversal neighbours (which causes cross-contamination).
-        # Falls back to traversal docs if we have no direct matches.
-        if direct_entity_ids:
-            try:
-                direct_docs = self.neo4j_db._find_documents_for_entities(direct_entity_ids)
-                all_docs = direct_docs
-            except Exception:
-                # If direct lookup fails, fall back to traversal docs
-                for node in all_nodes:
-                    docs = self.neo4j_db.find_documents_for_entity(node.get("name", ""))
-                    for doc in docs:
-                        if doc not in all_docs:
-                            all_docs.append(doc)
-        else:
-            # No direct matches — use traversal docs as before
-            for node in all_nodes:
-                docs = self.neo4j_db.find_documents_for_entity(node.get("name", ""))
-                for doc in docs:
-                    if doc not in all_docs:
-                        all_docs.append(doc)
+            for doc in graph_data.get("source_documents", []):
+                if doc not in all_docs:
+                    all_docs.append(doc)
 
         # 3. If direct traversal found nothing, try fuzzy search
         if not all_nodes:
@@ -111,7 +79,7 @@ class GraphRetriever:
                     if nid not in seen_node_ids:
                         seen_node_ids.add(nid)
                         all_nodes.append(entity)
-                    # For fuzzy hits, fetch docs directly for THIS entity only
+                    # Also get docs for this entity
                     docs = self.neo4j_db.find_documents_for_entity(entity.get("name", ""))
                     for doc in docs:
                         if doc not in all_docs:

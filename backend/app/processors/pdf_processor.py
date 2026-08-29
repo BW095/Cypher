@@ -1,9 +1,5 @@
 import traceback
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import (
-    AcceleratorDevice, AcceleratorOptions, PdfPipelineOptions,
-)
-from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.document_converter import DocumentConverter
 from app.ingestion.canonical_document import CanonicalDocument
 
 
@@ -11,18 +7,8 @@ from app.ai.ocr import OCRWrapper # We will build this wrapper later
 
 class PDFProcessor:
     def __init__(self):
-        # Initialize the IBM Docling converter, pinned to CPU: the GPU's
-        # 6 GB VRAM is owned by the resident LLM, and letting Docling try
-        # CUDA makes it die with out-of-memory whenever the LLM is loaded.
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.accelerator_options = AcceleratorOptions(
-            device=AcceleratorDevice.CPU,
-        )
-        self.converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
-            }
-        )
+        # Initialize the IBM Docling converter
+        self.converter = DocumentConverter()
         self.fallback_ocr = OCRWrapper()
 
     def process(self, file_path: str) -> CanonicalDocument:

@@ -15,12 +15,6 @@ class ChatRequest(BaseModel):
     """User sends a chat message."""
     user_message: str = Field(..., min_length=1, description="The user's question or prompt")
     session_id: Optional[str] = Field(None, description="Existing session ID. None creates a new session.")
-    attachments: Optional[List[str]] = Field(
-        None,
-        description="Absolute paths of files uploaded in this chat session, to "
-                    "prioritise as context for the answer (so 'what is this file "
-                    "about?' resolves to the just-uploaded document).",
-    )
 
 
 class SourceReference(BaseModel):
@@ -204,48 +198,3 @@ class HealthResponse(BaseModel):
     """API health check response."""
     status: str = "ok"
     services: Dict[str, str] = Field(default_factory=dict)
-
-
-# ==========================================================================
-# Structured Extraction Models
-# ==========================================================================
-
-class StructuredFieldsResponse(BaseModel):
-    """Structured key-value fields extracted from one document."""
-    file_path: str
-    file_name: str
-    doc_domain: str                             # industrial | government
-    doc_category: str                           # invoice | contract | certificate | form | general
-    fields: Dict[str, Any]                      # key → str value or list[str] for multi fields
-    entity_count: int = 0                       # how many Neo4j entities contributed
-
-
-class BatchExtractionItem(BaseModel):
-    """One row in a batch extraction result."""
-    file_path: str
-    file_name: str
-    doc_domain: str
-    doc_category: str
-    fields: Dict[str, Any]
-
-
-class BatchExtractionResponse(BaseModel):
-    """Batch structured extraction result across all (or filtered) documents."""
-    total: int = 0
-    items: List[BatchExtractionItem] = Field(default_factory=list)
-
-
-class TemplateField(BaseModel):
-    """Describes one field in an extraction template."""
-    field_key: str
-    label: str
-    entity_types: List[str]
-    multi: bool = False
-    name_hints: List[str] = Field(default_factory=list)
-
-
-class TemplateInfo(BaseModel):
-    """An extraction template for one document category."""
-    doc_category: str
-    fields: List[TemplateField]
-

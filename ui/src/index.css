@@ -339,6 +339,146 @@ textarea {
   background: var(--err);
 }
 
+/* ═══ Folder Sync Widget ═══════════════════════════════════════════ */
+
+.folder-sync-widget {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder-sync-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.folder-sync-unsupported {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.folder-sync-connect {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.14s ease;
+}
+
+.folder-sync-connect:hover {
+  border-color: var(--accent-line);
+  border-style: solid;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.folder-sync-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.folder-sync-reconnect-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.folder-sync-connected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.folder-sync-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-sync-disconnect {
+  flex-shrink: 0;
+  padding: 3px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  transition: color 0.12s ease;
+}
+
+.folder-sync-disconnect:hover {
+  color: var(--err);
+}
+
+.folder-sync-status {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.folder-sync-syncing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.folder-sync-synced {
+  color: var(--text-dim);
+}
+
+.folder-sync-time {
+  color: var(--text-faint);
+}
+
+.folder-sync-resync {
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-dim);
+  transition: all 0.12s ease;
+  align-self: flex-start;
+}
+
+.folder-sync-resync:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.folder-sync-resync:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.folder-sync-error {
+  font-size: 11.5px;
+  color: var(--err);
+  padding: 4px 8px;
+  background: rgba(248, 113, 113, 0.06);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
 /* ═══ Chat view ════════════════════════════════════════════════════ */
 
 .chat {

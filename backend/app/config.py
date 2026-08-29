@@ -1,10 +1,13 @@
 """
-Centralized configuration for the Cypher application.
+Centralized configuration for the Cypher application (cloud deployment).
 
 All configurable values live here. Services import from this module
 instead of hardcoding connection strings and model paths.
 
 Environment variables override defaults when set.
+
+Cloud variant: local GGUF model paths replaced with Amazon Bedrock
+model IDs. No GPU planning, no local model files needed.
 """
 
 import os
@@ -23,7 +26,7 @@ class QdrantConfig:
     HOST: str = os.getenv("QDRANT_HOST", "localhost")
     PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
     COLLECTION_NAME: str = os.getenv("QDRANT_COLLECTION", "industrial_knowledge")
-    VECTOR_SIZE: int = 768  # BAAI/bge-base-en-v1.5 output dimension
+    VECTOR_SIZE: int = int(os.getenv("VECTOR_SIZE", "1024"))  # Titan Embed v2 default
 
 
 class Neo4jConfig:
@@ -41,29 +44,29 @@ class SQLiteConfig:
 
 
 # ---------------------------------------------------------------------------
-# Model paths (local GGUF models)
+# Amazon Bedrock configuration
 # ---------------------------------------------------------------------------
-class ModelConfig:
-    QWEN_MODEL_PATH: str = os.getenv(
-        "QWEN_MODEL_PATH",
-        os.path.join(_PROJECT_ROOT, "models", "Qwen3VL-8B-Instruct-Q4_K_M.gguf"),
-    )
-    CLIP_PROJECTOR_PATH: str = os.getenv(
-        "CLIP_PROJECTOR_PATH",
-        os.path.join(_PROJECT_ROOT, "models", "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"),
-    )
-    BGE_MODEL_NAME: str = os.getenv("BGE_MODEL_NAME", "BAAI/bge-base-en-v1.5")
+class BedrockConfig:
+    REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
-    # Smaller model used ONLY for entity extraction during ingestion.
-    # Extraction makes many long-output LLM calls, so a small GGUF (a 3B here)
-    # runs several times faster than the 8B and can stay fully on GPU. If this
-    # file is absent, extraction transparently falls back to the main model
-    # (see EntityExtractor), so a missing download never breaks ingestion.
-    # Set to "" to force using the main model.
-    EXTRACTION_MODEL_PATH: str = os.getenv(
-        "EXTRACTION_MODEL_PATH",
-        os.path.join(_PROJECT_ROOT, "models", "Qwen2.5-3B-Instruct-Q4_K_M.gguf"),
+    # Main chat model — Claude 3.5 Haiku (vision-capable, cost-effective)
+    CHAT_MODEL_ID: str = os.getenv(
+        "BEDROCK_CHAT_MODEL_ID",
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0",
     )
+    # Entity extraction model — same Haiku for cost savings
+    EXTRACTION_MODEL_ID: str = os.getenv(
+        "BEDROCK_EXTRACTION_MODEL_ID",
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    )
+    # Embedding model — Titan Embed Text v2
+    EMBED_MODEL_ID: str = os.getenv(
+        "BEDROCK_EMBED_MODEL_ID",
+        "amazon.titan-embed-text-v2:0",
+    )
+    # Generation parameters
+    MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
+    TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +74,7 @@ class ModelConfig:
 # ---------------------------------------------------------------------------
 class RetrievalConfig:
     VECTOR_TOP_K: int = int(os.getenv("VECTOR_TOP_K", "5"))
-    GRAPH_SEARCH_DEPTH: int = int(os.getenv("GRAPH_SEARCH_DEPTH", "1"))
+    GRAPH_SEARCH_DEPTH: int = int(os.getenv("GRAPH_SEARCH_DEPTH", "2"))
     MAX_CONTEXT_CHARS: int = int(os.getenv("MAX_CONTEXT_CHARS", "6000"))
     MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "5"))
     # Over-fetch this many vector hits, then rerank down to VECTOR_TOP_K.
@@ -104,28 +107,6 @@ class ExtractionConfig:
 
 
 # ---------------------------------------------------------------------------
-# LLM generation parameters
-# ---------------------------------------------------------------------------
-class LLMConfig:
-    MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
-    TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-    N_CTX: int = int(os.getenv("LLM_N_CTX", "4096"))
-    SUBPROCESS_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "300"))
-
-    # GPU offload: "auto" plans layers from free VRAM (hardware.py);
-    # an integer forces that many layers (0 = CPU-only, like -1 used to force all).
-    N_GPU_LAYERS: str = os.getenv("LLM_N_GPU_LAYERS", "auto")
-    # VRAM headroom (MB) kept free for llama.cpp compute buffers when planning.
-    VRAM_RESERVE_MB: int = int(os.getenv("LLM_VRAM_RESERVE_MB", "800"))
-    # Unload the model after this many seconds of inactivity (0 = never unload).
-    IDLE_UNLOAD_SECONDS: int = int(os.getenv("LLM_IDLE_UNLOAD_SECONDS", "600"))
-    # Max seconds to wait for the model to load (CPU loads of 8B can be slow).
-    LOAD_TIMEOUT: int = int(os.getenv("LLM_LOAD_TIMEOUT", "600"))
-    # CPU threads for inference (0 = llama.cpp default).
-    N_THREADS: int = int(os.getenv("LLM_N_THREADS", "0"))
-
-
-# ---------------------------------------------------------------------------
 # Server settings
 # ---------------------------------------------------------------------------
 class ServerConfig:
@@ -135,3 +116,8 @@ class ServerConfig:
         "CORS_ORIGINS",
         "http://localhost:5173,http://localhost:3000",
     ).split(",")
+    # Directory for temporary uploaded files (browser sync)
+    UPLOAD_DIR: str = os.getenv(
+        "UPLOAD_DIR",
+        os.path.join(_BACKEND_DIR, "data", "uploads"),
+    )

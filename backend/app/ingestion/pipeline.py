@@ -10,7 +10,6 @@ from app.storage.qdrant import QdrantStorage
 from app.storage.sqlite import SQLiteStorage
 from app.storage.neo4j import Neo4jStorage  # Ensure this is imported
 from app.ai.entity_extractor import EntityExtractor
-from app.ai.document_classifier import DocumentClassifier
 
 
 # Hard ceiling on chunks per document (embedding is CPU-bound and serial).
@@ -35,8 +34,6 @@ class IngestionPipeline:
         self.qdrant_db = QdrantStorage()
         self.neo4j_db = Neo4jStorage()
         self.entity_extractor = EntityExtractor()
-        self.classifier = DocumentClassifier()
-
     def process_file(self, file_path: str):
         try:
             print(f"Starting pipeline for: {file_path}")
@@ -73,11 +70,6 @@ class IngestionPipeline:
             # Update file type in tracker
             self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "processing")
 
-            # 2b. Classify document domain/category (heuristic, no LLM call).
-            #     This sets doc_domain and doc_category on the canonical_doc so
-            #     the entity extractor can select the right extraction prompt.
-            canonical_doc = self.classifier.classify(canonical_doc)
-
             # 3. Chunk the text
             chunks = self.chunker.chunk_document(canonical_doc)
 
@@ -90,35 +82,17 @@ class IngestionPipeline:
                       f"for {file_path} (very large document).")
                 chunks = chunks[:_MAX_CHUNKS_PER_DOC]
 
-            if not chunks:
-                # Nothing extractable — every downstream store would be empty.
-                # Mark the file failed so the UI doesn't claim it's searchable.
-                self.tracker.add_or_update_document(
-                    canonical_doc.file_path, canonical_doc.file_type, "failed")
-                print(f"No text could be extracted from {file_path} — "
-                      f"marked as failed (nothing to index).")
-                sys.stdout.flush()
-                return
+            if chunks:
+                # 4. Generate Embeddings
+                chunk_texts = [chunk["text"] for chunk in chunks]
+                embeddings = self.embedding_model.embed_batch(chunk_texts)
 
-            # 4. Generate Embeddings
-            chunk_texts = [chunk["text"] for chunk in chunks]
-            embeddings = self.embedding_model.embed_batch(chunk_texts)
+                # 5. Store in Vector DB
+                self.qdrant_db.store_chunks(chunks, embeddings)
+                canonical_doc = self.entity_extractor.process_document(canonical_doc)
 
-            # 5. Store in Vector DB
-            self.qdrant_db.store_chunks(chunks, embeddings)
-            canonical_doc = self.entity_extractor.process_document(canonical_doc)
-
-            # 6. Store Entities and Relationships in Neo4j Graph
+            # 6. FIX: Store Entities and Relationships in Neo4j Graph
             self.neo4j_db.store_graph(canonical_doc)
-            # 6b. Build document entanglement links — match DOC_REFERENCE entities
-            #     extracted from this document against other Document nodes and
-            #     create (this_doc)-[:REFERENCES]->(other_doc) edges.
-            try:
-                links = self.neo4j_db.link_document_references(canonical_doc.file_path)
-                if links:
-                    print(f"  [Entanglement] Created {links} document reference link(s).")
-            except Exception as e:
-                print(f"  [Entanglement] link_document_references failed: {e}")
             # New entities were added — drop the graph retriever's name cache
             # so they're searchable on the very next query.
             try:
@@ -127,9 +101,9 @@ class IngestionPipeline:
                 pass
 
             # 7. Mark as completed and record the content hash for change detection
-            self.tracker.add_or_update_document(canonical_doc.file_path, canonical_doc.file_type, "completed")
-            self.tracker.set_document_hash(canonical_doc.file_path, content_hash)
-            print(f"Successfully processed and stored: {canonical_doc.file_path}")
+            self.tracker.add_or_update_document(file_path, canonical_doc.file_type, "completed")
+            self.tracker.set_document_hash(file_path, content_hash)
+            print(f"Successfully processed and stored: {file_path}")
             sys.stdout.flush()
 
         except Exception as e:
@@ -185,3 +159,71 @@ class IngestionPipeline:
             self.tracker.remove_document(file_path)
         except Exception as e:
             print(f"  SQLite cleanup failed for {file_path}: {e}")
+
+    def process_file_as(self, physical_path: str, track_as: str, content_hash: str = None):
+        """Ingest a file from physical_path but track it under track_as.
+
+        Used by the browser upload flow: the file is saved to uploads/ on the
+        server, but tracked under a browser:// key so the sync engine can
+        match it later. Reuses all the same processing/chunking/embedding logic.
+        """
+        try:
+            print(f"Starting pipeline for: {physical_path} (tracked as {track_as})")
+            sys.stdout.flush()
+
+            # Skip unchanged files
+            if content_hash is None:
+                try:
+                    content_hash = _hash_file(physical_path)
+                except OSError as e:
+                    print(f"  Could not read {physical_path} ({e}) — skipping.")
+                    return
+            if self.tracker.get_document_status(track_as) == "completed" \
+                    and self.tracker.get_document_hash(track_as) == content_hash:
+                print(f"  Unchanged since last ingest — skipping: {track_as}")
+                return
+
+            self.tracker.add_or_update_document(track_as, "unknown", "processing")
+
+            # Clear any prior data
+            try:
+                self.qdrant_db.delete_by_source(track_as)
+                self.neo4j_db.delete_document(track_as)
+            except Exception as e:
+                print(f"  Warning: could not clear previous data for {track_as}: {e}")
+
+            # Extract content from physical file
+            processor = self.dispatcher.get_processor(physical_path)
+            canonical_doc = processor.process(physical_path)
+            # Override file_path so all downstream storage uses the track_as key
+            canonical_doc.file_path = track_as
+
+            self.tracker.add_or_update_document(track_as, canonical_doc.file_type, "processing")
+
+            # Chunk, embed, store
+            chunks = self.chunker.chunk_document(canonical_doc)
+            if len(chunks) > _MAX_CHUNKS_PER_DOC:
+                print(f"  Capping {len(chunks)} chunks -> {_MAX_CHUNKS_PER_DOC}")
+                chunks = chunks[:_MAX_CHUNKS_PER_DOC]
+
+            if chunks:
+                chunk_texts = [chunk["text"] for chunk in chunks]
+                embeddings = self.embedding_model.embed_batch(chunk_texts)
+                self.qdrant_db.store_chunks(chunks, embeddings)
+                canonical_doc = self.entity_extractor.process_document(canonical_doc)
+
+            self.neo4j_db.store_graph(canonical_doc)
+            try:
+                self.neo4j_db.invalidate_entity_cache()
+            except Exception:
+                pass
+
+            self.tracker.add_or_update_document(track_as, canonical_doc.file_type, "completed")
+            self.tracker.set_document_hash(track_as, content_hash)
+            print(f"Successfully processed: {physical_path} (tracked as {track_as})")
+            sys.stdout.flush()
+
+        except Exception as e:
+            self.tracker.add_or_update_document(track_as, "unknown", "failed")
+            print(f"Ingestion failed for {physical_path}: {e}")
+            traceback.print_exc()

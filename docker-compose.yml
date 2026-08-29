@@ -1,12 +1,13 @@
 name: cypher
 
-# Cypher — industrial AI brain. Four services: the vector DB (Qdrant), the graph
-# DB (Neo4j), the FastAPI backend (local GPU LLM), and the nginx-served React UI.
+# Cypher — industrial AI brain (cloud deployment). Four services: the vector DB
+# (Qdrant), the graph DB (Neo4j), the FastAPI backend (Bedrock LLM), and the
+# nginx-served React UI.
 #
-# Prerequisites on the host:
-#   - NVIDIA driver + nvidia-container-toolkit (for GPU passthrough to backend)
-#   - GGUF models placed in ./models (see .env.example / DEPLOY.md)
-#   - a .env file (copy from .env.example)
+# Prerequisites:
+#   - AWS credentials (IAM role on EC2, or access keys in .env)
+#   - Bedrock model access enabled (Claude 3.5 Haiku + Titan Embed v2)
+#   - a .env file (copy from .env.cloud.example)
 
 services:
   qdrant:
@@ -44,29 +45,19 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-please-change-me}"
       SQLITE_DB_PATH: /data/app.db
-      # Model paths inside the container (./models is mounted at /models).
-      QWEN_MODEL_PATH: /models/Qwen3VL-8B-Instruct-Q4_K_M.gguf
-      CLIP_PROJECTOR_PATH: /models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
-      EXTRACTION_MODEL_PATH: /models/Qwen2.5-3B-Instruct-Q4_K_M.gguf
-      # Cache downloaded embedding / reranker models on a volume.
-      HF_HOME: /hf-cache
+      UPLOAD_DIR: /data/uploads
+      # Amazon Bedrock
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      BEDROCK_CHAT_MODEL_ID: "${BEDROCK_CHAT_MODEL_ID:-}"
+      BEDROCK_EXTRACTION_MODEL_ID: "${BEDROCK_EXTRACTION_MODEL_ID:-}"
+      BEDROCK_EMBED_MODEL_ID: "${BEDROCK_EMBED_MODEL_ID:-}"
       CORS_ORIGINS: "http://localhost:${WEB_PORT:-8080}"
     volumes:
-      - ./models:/models:ro
       # Documents to ingest. Track subfolders of /documents in the UI.
       - ${DOCUMENTS_DIR:-./documents}:/documents
       - backend_data:/data
-      - hf_cache:/hf-cache
-    # GPU passthrough (needs nvidia-container-toolkit on the host).
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # Usually only the frontend is exposed; uncomment to hit the API directly:
-    # ports: ["8000:8000"]
 
   frontend:
     build:
@@ -82,4 +73,3 @@ volumes:
   qdrant_data:
   neo4j_data:
   backend_data:
-  hf_cache:

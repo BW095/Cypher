@@ -147,13 +147,6 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("🛑 Shutting down Cypher AI Brain...")
 
-    try:
-        from app.ai.model_manager import shutdown_model_manager
-        shutdown_model_manager()
-        logger.info("  ✅ LLM worker stopped, VRAM freed")
-    except Exception:
-        pass
-
     if _neo4j:
         try:
             _neo4j.close()
@@ -170,13 +163,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Cypher AI Brain",
     description=(
-        "Industrial & government document AI knowledge engine. Understands company "
-        "documents, connects them through a knowledge graph, provides intelligent "
-        "answers grounded in your data, and exports structured field-level data "
-        "(invoice totals, contract parties, certificate validity, etc.) to "
-        "CSV / Excel / JSON."
+        "Industrial AI knowledge engine that understands company documents, "
+        "connects them through a knowledge graph, and provides intelligent "
+        "answers grounded in your data."
     ),
-    version="0.2.0",
+    version="0.1.0",
     lifespan=lifespan,
 )
 
@@ -197,18 +188,12 @@ from app.api.ingestion import router as ingestion_router
 from app.api.documents import router as documents_router
 from app.api.graph import router as graph_router
 from app.api.compliance import router as compliance_router
-from app.api.extract import router as extract_router
-from app.api.upload import router as upload_router
-from app.api.entanglement import router as entanglement_router
 
 app.include_router(chat_router)
 app.include_router(ingestion_router)
 app.include_router(documents_router)
 app.include_router(graph_router)
 app.include_router(compliance_router)
-app.include_router(extract_router)
-app.include_router(upload_router)
-app.include_router(entanglement_router)
 
 
 # ---------------------------------------------------------------------------
@@ -224,20 +209,10 @@ async def health_check():
     services["neo4j"] = "ok" if _neo4j else "unavailable"
     services["embeddings"] = "configured" if _embedding_model else "unavailable"
 
-    if _llm:
-        try:
-            s = _llm.manager.status()
-            if s["loaded"]:
-                services["llm"] = f"loaded (n_gpu_layers={s['n_gpu_layers']})"
-            else:
-                services["llm"] = "configured (loads on first use)"
-        except Exception:
-            services["llm"] = "configured"
-    else:
-        services["llm"] = "unavailable"
+    services["llm"] = "bedrock" if _llm else "unavailable"
 
     overall = "ok" if all(
-        v.startswith(("ok", "configured", "loaded")) for v in services.values()
+        v.startswith(("ok", "configured", "loaded", "bedrock")) for v in services.values()
     ) else "degraded"
 
     return HealthResponse(status=overall, services=services)

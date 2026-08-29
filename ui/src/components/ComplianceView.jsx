@@ -138,6 +138,9 @@ export default function ComplianceView() {
                   <strong style={{ color: 'var(--text)' }}>Procedures:</strong> {r.linked_procedures?.length > 0 ? r.linked_procedures.join(', ') : <span style={{ color: 'var(--text-faint)' }}>None linked</span>}
                 </div>
                 <div>
+                  <strong style={{ color: 'var(--text)' }}>Accountable Owners:</strong> {r.linked_owners?.length > 0 ? r.linked_owners.join(', ') : <span style={{ color: 'var(--text-faint)' }}>None linked</span>}
+                </div>
+                <div>
                   <strong style={{ color: 'var(--text)' }}>Equipment:</strong> {r.linked_equipment?.length > 0 ? r.linked_equipment.join(', ') : <span style={{ color: 'var(--text-faint)' }}>None linked</span>}
                 </div>
                 <div>

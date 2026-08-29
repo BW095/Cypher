@@ -88,16 +88,11 @@ class Neo4jStorage:
         # (e.g. -[:HAS_FAILURE]->) rather than a generic -[:RELATED_TO {type}]->,
         # so the graph is queryable/colorable by real relationship types.
         # The type is sanitized (it can't be a bound parameter in Cypher).
-        # Fix 1: MERGE is already idempotent on (source, type, target); we add
-        # ON CREATE / ON MATCH timestamps so repeated ingestion of the same doc
-        # never produces duplicate edges — it just updates the timestamp.
         rel_type = self._safe_rel_type(rel.get("type"))
         query = f"""
         MATCH (source:Entity {{id: $source_id}})
         MATCH (target:Entity {{id: $target_id}})
-        MERGE (source)-[r:{rel_type}]->(target)
-        ON CREATE SET r.created_at = datetime()
-        ON MATCH  SET r.updated_at = datetime()
+        MERGE (source)-[:{rel_type}]->(target)
         """
         try:
             self.driver.execute_query(
@@ -178,27 +173,20 @@ class Neo4jStorage:
             logging.error(f"Error deleting document {file_path} from graph: {e}")
 
     def _merge_document(self, document: CanonicalDocument):
-        # Create/update the node for the document itself, including the
-        # domain/category classification so the extraction API can read them
-        # without re-running the classifier.
+        # Create/update the node for the document itself
         doc_query = """
         MERGE (d:Document {path: $file_path})
-        SET d.type = $file_type,
-            d.doc_domain   = $doc_domain,
-            d.doc_category = $doc_category
+        SET d.type = $file_type
         """
         try:
             self.driver.execute_query(
                 doc_query,
                 file_path=document.file_path,
                 file_type=document.file_type,
-                doc_domain=getattr(document, "doc_domain", "industrial"),
-                doc_category=getattr(document, "doc_category", "general"),
                 database_=self.database
             )
         except Exception as e:
             logging.error(f"Error merging document node {document.file_path}: {e}")
-
 
     def _link_document_to_entities(self, document: CanonicalDocument):
         # Link the document node to the extracted entities
@@ -584,259 +572,3 @@ class Neo4jStorage:
                 "total_documents": 0,
                 "entity_types": {},
             }
-
-    # ------------------------------------------------------------------
-    # Document Entanglement Graph
-    # ------------------------------------------------------------------
-
-    def link_document_references(self, file_path: str) -> int:
-        """After ingestion, match every DOC_REFERENCE entity that this document
-        MENTIONS against other Document nodes in the graph and create a
-        (source:Document)-[:REFERENCES {ref_id}]->(target:Document) edge.
-
-        Matching uses three passes (fastest-first):
-          1. Exact basename-stem match (ref_id stem == doc stem).
-          2. Substring — ref_id (lowercased) appears inside doc basename.
-          3. Token overlap — significant tokens from the ref_id appear in the
-             doc basename (handles PO-MoF-2024-IT-0089 style IDs).
-
-        Returns how many new links were created.
-        """
-        import os
-        import re as _re
-        created = 0
-        try:
-            # Fetch all DOC_REFERENCE entities mentioned by this document.
-            ref_records, _, _ = self.driver.execute_query(
-                """
-                MATCH (d:Document {path: $path})-[:MENTIONS]->(e:Entity {type: 'DOC_REFERENCE'})
-                RETURN e.id AS eid, e.name AS ref_id, e.description AS description
-                """,
-                path=file_path, database_=self.database,
-            )
-            if not ref_records:
-                return 0
-
-            # Fetch all Document paths for matching.
-            doc_records, _, _ = self.driver.execute_query(
-                "MATCH (d:Document) RETURN d.path AS path",
-                database_=self.database,
-            )
-
-            def _stem(p):
-                return os.path.splitext(os.path.basename(p or "").lower())[0]
-
-            # Build lookup: stem -> path (excluding self)
-            doc_map = {_stem(r["path"]): r["path"]
-                       for r in doc_records if r.get("path") and r["path"] != file_path}
-
-            def _sig_tokens(s):
-                """Return significant tokens (len>=3, not pure digits) from a ref ID."""
-                parts = _re.split(r'[-_\s/]+', s.lower())
-                return [p for p in parts if len(p) >= 3 and not p.isdigit()]
-
-            for ref in ref_records:
-                ref_id = (ref.get("ref_id") or "").strip()
-                if not ref_id or len(ref_id) < 3:
-                    continue
-
-                ref_stem = _stem(ref_id)
-                ref_lower = ref_id.lower()
-                ref_tokens = _sig_tokens(ref_id)
-                matched_path = None
-
-                for doc_stem, doc_path in doc_map.items():
-                    # Pass 1: exact stem match
-                    if ref_stem and ref_stem == doc_stem:
-                        matched_path = doc_path
-                        break
-                    # Pass 2: ref_id substring inside doc stem, or vice versa
-                    if ref_stem and (ref_stem in doc_stem or doc_stem in ref_stem):
-                        matched_path = doc_path
-                        break
-                    if len(ref_lower) >= 4 and ref_lower in doc_stem:
-                        matched_path = doc_path
-                        break
-
-                if not matched_path and ref_tokens:
-                    # Pass 3: token overlap — at least 2 significant tokens match
-                    # (or 1 if ref has only 1 significant token)
-                    threshold = min(2, len(ref_tokens))
-                    best_score = 0
-                    best_path = None
-                    for doc_stem, doc_path in doc_map.items():
-                        score = sum(1 for tok in ref_tokens if tok in doc_stem)
-                        if score >= threshold and score > best_score:
-                            best_score = score
-                            best_path = doc_path
-                    matched_path = best_path
-
-                if not matched_path:
-                    continue
-
-                # Create the Document→Document REFERENCES edge.
-                try:
-                    self.driver.execute_query(
-                        """
-                        MATCH (src:Document {path: $src_path})
-                        MATCH (tgt:Document {path: $tgt_path})
-                        MERGE (src)-[r:REFERENCES {ref_id: $ref_id}]->(tgt)
-                        ON CREATE SET r.created_at = datetime()
-                        """,
-                        src_path=file_path,
-                        tgt_path=matched_path,
-                        ref_id=ref_id,
-                        database_=self.database,
-                    )
-                    created += 1
-                    print(f"  [Entanglement] Linked {os.path.basename(file_path)}"
-                          f" -[:REFERENCES {ref_id}]-> {os.path.basename(matched_path)}")
-                except Exception as exc:
-                    logging.error(f"  [Entanglement] Failed to create link: {exc}")
-
-        except Exception as e:
-            logging.error(f"[Entanglement] link_document_references failed for {file_path}: {e}")
-        return created
-
-
-    def get_entanglement_graph(self) -> dict:
-        """Return the full document-level dependency graph.
-
-        Nodes are Document nodes; edges are [:REFERENCES] relationships.
-        Each node carries: path, basename, category, domain, status.
-        Each edge carries: ref_id (the identifier that created the link).
-        """
-        try:
-            node_records, _, _ = self.driver.execute_query(
-                """
-                MATCH (d:Document)
-                RETURN d.path AS path,
-                       d.doc_category AS category,
-                       d.doc_domain   AS domain,
-                       d.doc_status   AS status,
-                       d.type         AS file_type
-                """,
-                database_=self.database,
-            )
-            edge_records, _, _ = self.driver.execute_query(
-                """
-                MATCH (src:Document)-[r:REFERENCES]->(tgt:Document)
-                RETURN src.path AS source, tgt.path AS target,
-                       r.ref_id AS ref_id
-                """,
-                database_=self.database,
-            )
-            import os
-            nodes = [
-                {
-                    "id": r["path"],
-                    "path": r["path"],
-                    "name": os.path.basename(r["path"] or ""),
-                    "category": r["category"] or "general",
-                    "domain": r["domain"] or "industrial",
-                    "status": r["status"] or "active",
-                    "file_type": r["file_type"] or "",
-                }
-                for r in node_records if r.get("path")
-            ]
-            edges = [
-                {
-                    "source": r["source"],
-                    "target": r["target"],
-                    "ref_id": r["ref_id"] or "",
-                }
-                for r in edge_records
-                if r.get("source") and r.get("target")
-            ]
-            return {"nodes": nodes, "edges": edges}
-        except Exception as e:
-            logging.error(f"[Entanglement] get_entanglement_graph failed: {e}")
-            return {"nodes": [], "edges": []}
-
-    def get_risk_chain(self, file_path: str, max_depth: int = 6) -> dict:
-        """Given a document that is revoked/expired/cancelled, traverse all
-        downstream documents that [:REFERENCES] it (directly or transitively)
-        and return them as a risk-impact list.
-
-        Returns {source: path, at_risk: [{path, name, category, depth, ref_id}]}
-        """
-        import os
-        try:
-            records, _, _ = self.driver.execute_query(
-                """
-                MATCH (root:Document {path: $path})
-                CALL apoc.path.subgraphAll(root,
-                    {relationshipFilter: '<REFERENCES', maxLevel: $depth})
-                YIELD nodes, relationships
-                RETURN nodes, relationships
-                """,
-                path=file_path, depth=max_depth, database_=self.database,
-            )
-            at_risk = []
-            seen = set()
-            for rec in records:
-                for node in rec.get("nodes", []):
-                    p = node.get("path")
-                    if p and p != file_path and p not in seen:
-                        seen.add(p)
-                        at_risk.append({
-                            "path": p,
-                            "name": os.path.basename(p),
-                            "category": node.get("doc_category") or "general",
-                            "status": node.get("doc_status") or "active",
-                        })
-        except Exception:
-            # APOC not available — use Cypher variable-length path
-            try:
-                records, _, _ = self.driver.execute_query(
-                    """
-                    MATCH (root:Document {path: $path})
-                    MATCH (dep:Document)-[:REFERENCES*1..6]->(root)
-                    RETURN DISTINCT dep.path AS path,
-                                   dep.doc_category AS category,
-                                   dep.doc_status   AS status
-                    """,
-                    path=file_path, database_=self.database,
-                )
-                import os
-                at_risk = [
-                    {
-                        "path": r["path"],
-                        "name": os.path.basename(r["path"] or ""),
-                        "category": r["category"] or "general",
-                        "status": r["status"] or "active",
-                    }
-                    for r in records if r.get("path")
-                ]
-            except Exception as e2:
-                logging.error(f"[Entanglement] get_risk_chain fallback failed: {e2}")
-                at_risk = []
-
-        return {
-            "source": file_path,
-            "source_name": os.path.basename(file_path),
-            "at_risk": at_risk,
-            "total_at_risk": len(at_risk),
-        }
-
-    def update_document_status(self, file_path: str, status: str) -> bool:
-        """Set the doc_status property on a Document node.
-
-        Status values: 'active' | 'revoked' | 'expired' | 'cancelled' | 'suspended'
-        """
-        allowed = {"active", "revoked", "expired", "cancelled", "suspended"}
-        if status not in allowed:
-            logging.warning(f"[Entanglement] Unknown status '{status}' — ignoring.")
-            return False
-        try:
-            self.driver.execute_query(
-                """
-                MATCH (d:Document {path: $path})
-                SET d.doc_status = $status
-                """,
-                path=file_path, status=status, database_=self.database,
-            )
-            return True
-        except Exception as e:
-            logging.error(f"[Entanglement] update_document_status failed: {e}")
-            return False

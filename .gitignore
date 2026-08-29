@@ -8,4 +8,11 @@ build/
 identifier.sqlite
 **/__pycache__/
 **/*.pyc
-models/
+models/qdrant_storage/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Qdrant data
+qdrant_storage/

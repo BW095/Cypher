@@ -1,77 +1,82 @@
 """
-BGE embedding model wrapper.
+Embedding model wrapper — Amazon Bedrock Titan Text Embeddings v2.
 
-The model is loaded once (CPU) and kept resident for the life of the
-process — it's only ~400MB of RAM and is needed by every query and every
-ingested document. Loading prefers the local HuggingFace cache
-(local_files_only) so routine queries make zero network calls; the
-download path is only taken on the very first run.
+Replaces the local sentence-transformers BGE model with Bedrock API
+calls. The public API (embed_batch / embed_query) is unchanged, so
+the ingestion pipeline and vector retriever work without modification.
+
+Titan Embed Text v2 outputs 1024-dimensional vectors by default.
 """
 
-import os
-import threading
+import json
+import boto3
 
-# Quiet HF background noise before sentence_transformers is imported.
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+from app.config import BedrockConfig, QdrantConfig
 
 
 class BGEWrapper:
-    _model = None
-    _model_name = None
-    _lock = threading.Lock()
+    """Bedrock embedding wrapper.
+
+    Named BGEWrapper for backward compatibility — the rest of the
+    codebase imports this name.
+    """
 
     def __init__(self, model_name: str = None):
-        if model_name is None:
-            from app.config import ModelConfig
-            model_name = ModelConfig.BGE_MODEL_NAME
-        self.model_name = model_name
+        # model_name kept for API compat; ignored in Bedrock mode
+        self.model_id = BedrockConfig.EMBED_MODEL_ID
+        self._client = None
 
-    def _get_model(self):
-        cls = type(self)
-        with cls._lock:
-            if cls._model is None or cls._model_name != self.model_name:
-                cls._model = self._load(self.model_name)
-                cls._model_name = self.model_name
-            return cls._model
-
-    @staticmethod
-    def _load(model_name: str):
-        from sentence_transformers import SentenceTransformer
-        print(f"Loading BGE embedding model '{model_name}' (CPU, kept resident)...")
-        try:
-            # Offline-first: use the local cache without any HTTP round-trips.
-            return SentenceTransformer(model_name, device="cpu", local_files_only=True)
-        except TypeError:
-            # Older sentence-transformers without local_files_only support.
-            return SentenceTransformer(model_name, device="cpu")
-        except Exception:
-            print("  Not in local cache — downloading from HuggingFace (first run only)...")
-            return SentenceTransformer(model_name, device="cpu")
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = boto3.client(
+                "bedrock-runtime",
+                region_name=BedrockConfig.REGION,
+            )
+        return self._client
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed a document's chunks. CPU keeps the GPU free for the LLM."""
+        """Embed a list of document chunks. Returns a list of vectors."""
         if not texts:
             return []
-        model = self._get_model()
-        embeddings = model.encode(texts, normalize_embeddings=True)
-        return embeddings.tolist()
+        results = []
+        # Titan Embed accepts one text at a time; batch serially.
+        # For large batches this is fine — Bedrock latency is ~50ms/call.
+        for text in texts:
+            vec = self._embed_one(text, input_type="search_document")
+            if vec:
+                results.append(vec)
+            else:
+                # Fallback: zero vector so indices stay aligned
+                results.append([0.0] * QdrantConfig.VECTOR_SIZE)
+        return results
 
     def embed_query(self, text: str) -> list[float]:
-        """Embed a single query string for semantic search.
+        """Embed a single query string for semantic search."""
+        vec = self._embed_one(text, input_type="search_query")
+        return vec if vec else [0.0] * QdrantConfig.VECTOR_SIZE
 
-        Uses the BGE-recommended query prefix so that query embeddings
-        align better with passage embeddings in vector space.
-        """
-        prefixed = f"Represent this sentence for searching relevant passages: {text}"
-        model = self._get_model()
-        embedding = model.encode([prefixed], normalize_embeddings=True)
-        return embedding[0].tolist()
+    def _embed_one(self, text: str, input_type: str = "search_document") -> list[float] | None:
+        """Call Titan Embed Text v2 for a single text."""
+        try:
+            body = {
+                "inputText": text[:8000],  # Titan v2 max ~8K tokens
+                "dimensions": QdrantConfig.VECTOR_SIZE,
+                "normalize": True,
+            }
+            response = self.client.invoke_model(
+                modelId=self.model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body),
+            )
+            result = json.loads(response["body"].read())
+            return result.get("embedding")
+        except Exception as e:
+            print(f"[Bedrock Embed] Error: {e}")
+            return None
 
     @classmethod
     def unload(cls):
-        """Release the resident model (rarely needed — it lives in CPU RAM)."""
-        import gc
-        with cls._lock:
-            cls._model = None
-            cls._model_name = None
-        gc.collect()
+        """No-op for Bedrock — nothing local to unload."""
+        pass
