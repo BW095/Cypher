@@ -30,7 +30,7 @@ class QdrantConfig:
 
 
 class Neo4jConfig:
-    URI: str = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
+    URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     USER: str = os.getenv("NEO4J_USER", "neo4j")
     PASSWORD: str = os.getenv("NEO4J_PASSWORD", "password")
     DATABASE: str = os.getenv("NEO4J_DATABASE", "neo4j")
