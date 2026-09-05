@@ -22,12 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# 1) CPU-only torch (for Whisper audio transcription)
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install torch==2.13.0 torchvision==0.28.0 \
-        --index-url https://download.pytorch.org/whl/cpu
-
-# 2) Python dependencies
+# Python dependencies (no PyTorch — all inference is via Bedrock API)
+RUN pip install --upgrade pip setuptools wheel
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
