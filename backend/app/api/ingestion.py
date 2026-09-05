@@ -304,7 +304,7 @@ async def remove_file(local_path: str = Query(...)):
 # POST /api/ingest/file-hashes — batch check which files need re-upload
 # -------------------------------------------------------------------------
 @router.post("/file-hashes")
-async def check_file_hashes(file_hashes: dict[str, str]):
+async def check_file_hashes(payload: dict):
     """Accept a dict of {local_path: sha256_hash} from the browser.
 
     Returns which files need uploading (new or changed) and which are
@@ -317,7 +317,7 @@ async def check_file_hashes(file_hashes: dict[str, str]):
     if db is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    browser_files = file_hashes.get("files", {})
+    browser_files = payload.get("files", {})
     needs_upload = []
     up_to_date = []
     server_deleted = []
