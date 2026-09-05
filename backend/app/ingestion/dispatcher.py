@@ -41,11 +41,7 @@ class Dispatcher:
     def _get_shared(self, name: str):
         """Lazily create and cache shared model instances."""
         if name not in self._shared_resources:
-            if name == 'docling':
-                from docling.document_converter import DocumentConverter
-                print("  [Dispatcher] Loading Docling DocumentConverter (shared)...")
-                self._shared_resources[name] = DocumentConverter()
-            elif name == 'ocr':
+            if name == 'ocr':
                 from app.ai.ocr import OCRWrapper
                 print("  [Dispatcher] Loading OCR wrapper (shared)...")
                 self._shared_resources[name] = OCRWrapper()
@@ -55,7 +51,7 @@ class Dispatcher:
                 self._shared_resources[name] = QwenVLWrapper()
             elif name == 'whisper':
                 from app.ai.audio_model import WhisperWrapper
-                print("  [Dispatcher] Loading Whisper wrapper (shared)...")
+                print("  [Dispatcher] Loading Whisper (stub) wrapper (shared)...")
                 self._shared_resources[name] = WhisperWrapper()
         return self._shared_resources[name]
 
@@ -63,10 +59,7 @@ class Dispatcher:
         """Create a processor for the given group, injecting shared resources."""
         if group == 'pdf':
             from app.processors.pdf_processor import PDFProcessor
-            proc = PDFProcessor.__new__(PDFProcessor)
-            proc.converter = self._get_shared('docling')
-            proc.fallback_ocr = self._get_shared('ocr')
-            return proc
+            return PDFProcessor()
 
         elif group == 'image':
             from app.processors.image_processor import ImageProcessor
@@ -100,12 +93,7 @@ class Dispatcher:
 
         elif group == 'office':
             from app.processors.office_processor import OfficeProcessor
-            proc = OfficeProcessor()
-            # Docling is lazy inside OfficeProcessor — only loaded for .docx/.pptx,
-            # not for .txt or .html. If a PDF already loaded Docling, share it.
-            if 'docling' in self._shared_resources:
-                proc.converter = self._shared_resources['docling']
-            return proc
+            return OfficeProcessor()
 
         raise ValueError(f"Unknown processor group: {group}")
 
