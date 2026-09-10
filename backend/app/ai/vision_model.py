@@ -1,9 +1,8 @@
 """
-Vision model interface — Amazon Bedrock (Converse API).
+Vision model interface — Bedrock Mantle (OpenAI-compatible API).
 
-Uses the Converse API which works with both:
-  - Amazon Nova Pro  (default, no Anthropic form needed)
-  - Anthropic Claude 3.5 Haiku  (override with BEDROCK_CHAT_MODEL_ID)
+Uses the OpenAI SDK's vision capabilities with base64-encoded images.
+Falls back gracefully if the model doesn't support images.
 
 Same analyze_image(path, prompt) interface as before.
 """
@@ -11,16 +10,13 @@ Same analyze_image(path, prompt) interface as before.
 import base64
 import mimetypes
 
-import boto3
+from openai import OpenAI
 
 from app.config import BedrockConfig
 
-# Converse-supported image formats
-_SUPPORTED_FORMATS = {"jpeg", "png", "gif", "webp"}
-
 
 class QwenVLWrapper:
-    """Bedrock vision wrapper.
+    """Mantle vision wrapper.
 
     Named QwenVLWrapper for backward compatibility — the rest of the
     codebase imports this name.
@@ -32,27 +28,30 @@ class QwenVLWrapper:
         self._client = None
 
     @property
-    def client(self):
+    def client(self) -> OpenAI:
         if self._client is None:
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=BedrockConfig.REGION,
+            self._client = OpenAI(
+                base_url=BedrockConfig.MANTLE_BASE_URL,
+                api_key=BedrockConfig.MANTLE_API_KEY,
+                default_headers={"OpenAI-Project": "default"},
             )
         return self._client
 
     def analyze_image(self, image_path: str, prompt: str,
                       max_tokens: int = 512) -> str:
-        """Describe an image using Bedrock Converse vision. Returns '' on failure."""
-        print(f"Analyzing image with Bedrock Vision ({self.model_id}): {image_path}")
+        """Describe an image using Mantle vision. Returns '' on failure."""
+        print(f"Analyzing image with Mantle Vision ({self.model_id}): {image_path}")
         try:
             with open(image_path, "rb") as f:
                 image_bytes = f.read()
 
-            # Detect image format
+            # Detect MIME type
             mime_type, _ = mimetypes.guess_type(image_path)
-            ext = (mime_type or "image/jpeg").split("/")[-1].lower()
-            if ext not in _SUPPORTED_FORMATS:
-                ext = "jpeg"
+            if not mime_type or not mime_type.startswith("image/"):
+                mime_type = "image/jpeg"
+
+            b64_image = base64.b64encode(image_bytes).decode("utf-8")
+            data_url = f"data:{mime_type};base64,{b64_image}"
 
             system_prompt = (
                 "You are an industrial inspection assistant. You describe "
@@ -62,34 +61,27 @@ class QwenVLWrapper:
                 "You never invent details that are not visible."
             )
 
-            response = self.client.converse(
-                modelId=self.model_id,
-                system=[{"text": system_prompt}],
+            response = self.client.chat.completions.create(
+                model=self.model_id,
                 messages=[
+                    {"role": "system", "content": system_prompt},
                     {
                         "role": "user",
                         "content": [
                             {
-                                "image": {
-                                    "format": ext,
-                                    "source": {"bytes": image_bytes},
-                                }
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
                             },
-                            {"text": prompt},
+                            {"type": "text", "text": prompt},
                         ],
-                    }
+                    },
                 ],
-                inferenceConfig={
-                    "maxTokens": max_tokens,
-                    "temperature": 0.1,
-                },
+                max_tokens=max_tokens,
+                temperature=0.1,
             )
 
-            # Extract text from Converse response
-            content = response.get("output", {}).get("message", {}).get("content", [])
-            parts = [block.get("text", "") for block in content if "text" in block]
-            return "\n".join(parts).strip()
+            return response.choices[0].message.content or ""
 
         except Exception as e:
-            print(f"[Bedrock Vision] Error analyzing {image_path}: {e}")
+            print(f"[Mantle Vision] Error analyzing {image_path}: {e}")
             return ""

@@ -1,82 +1,54 @@
 """
-Embedding model wrapper — Amazon Bedrock Titan Text Embeddings v2.
+Embedding model wrapper — local sentence-transformers.
 
-Replaces the local sentence-transformers BGE model with Bedrock API
-calls. The public API (embed_batch / embed_query) is unchanged, so
-the ingestion pipeline and vector retriever work without modification.
+Uses a small, fast embedding model (all-MiniLM-L6-v2, 384-dim) that runs
+locally on CPU. No API calls needed — works on free-tier AWS accounts
+where Bedrock model invocation is restricted.
 
-Titan Embed Text v2 outputs 1024-dimensional vectors by default.
+The public API (embed_batch / embed_query) is unchanged, so the
+ingestion pipeline and vector retriever work without modification.
 """
 
-import json
-import boto3
+from sentence_transformers import SentenceTransformer
 
 from app.config import BedrockConfig, QdrantConfig
 
 
 class BGEWrapper:
-    """Bedrock embedding wrapper.
+    """Local sentence-transformers embedding wrapper.
 
     Named BGEWrapper for backward compatibility — the rest of the
     codebase imports this name.
     """
 
+    _model = None  # Class-level singleton to avoid reloading
+
     def __init__(self, model_name: str = None):
-        # model_name kept for API compat; ignored in Bedrock mode
-        self.model_id = BedrockConfig.EMBED_MODEL_ID
-        self._client = None
+        self.model_name = model_name or BedrockConfig.LOCAL_EMBED_MODEL
+        if BGEWrapper._model is None:
+            print(f"[Embeddings] Loading local model: {self.model_name}")
+            BGEWrapper._model = SentenceTransformer(self.model_name)
+            print(f"[Embeddings] Model loaded — {QdrantConfig.VECTOR_SIZE}-dim vectors")
 
     @property
-    def client(self):
-        if self._client is None:
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=BedrockConfig.REGION,
-            )
-        return self._client
+    def model(self):
+        return BGEWrapper._model
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of document chunks. Returns a list of vectors."""
         if not texts:
             return []
-        results = []
-        # Titan Embed accepts one text at a time; batch serially.
-        # For large batches this is fine — Bedrock latency is ~50ms/call.
-        for text in texts:
-            vec = self._embed_one(text, input_type="search_document")
-            if vec:
-                results.append(vec)
-            else:
-                # Fallback: zero vector so indices stay aligned
-                results.append([0.0] * QdrantConfig.VECTOR_SIZE)
-        return results
+        # Truncate very long texts (model max is ~256 tokens / ~1500 chars)
+        truncated = [t[:2000] for t in texts]
+        embeddings = self.model.encode(truncated, normalize_embeddings=True)
+        return embeddings.tolist()
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query string for semantic search."""
-        vec = self._embed_one(text, input_type="search_query")
-        return vec if vec else [0.0] * QdrantConfig.VECTOR_SIZE
-
-    def _embed_one(self, text: str, input_type: str = "search_document") -> list[float] | None:
-        """Call Titan Embed Text v2 for a single text."""
-        try:
-            body = {
-                "inputText": text[:8000],  # Titan v2 max ~8K tokens
-                "dimensions": QdrantConfig.VECTOR_SIZE,
-                "normalize": True,
-            }
-            response = self.client.invoke_model(
-                modelId=self.model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body),
-            )
-            result = json.loads(response["body"].read())
-            return result.get("embedding")
-        except Exception as e:
-            print(f"[Bedrock Embed] Error: {e}")
-            return None
+        embedding = self.model.encode(text[:2000], normalize_embeddings=True)
+        return embedding.tolist()
 
     @classmethod
     def unload(cls):
-        """No-op for Bedrock — nothing local to unload."""
-        pass
+        """Release model memory if needed."""
+        cls._model = None

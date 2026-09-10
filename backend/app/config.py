@@ -26,7 +26,7 @@ class QdrantConfig:
     HOST: str = os.getenv("QDRANT_HOST", "localhost")
     PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
     COLLECTION_NAME: str = os.getenv("QDRANT_COLLECTION", "industrial_knowledge")
-    VECTOR_SIZE: int = int(os.getenv("VECTOR_SIZE", "1024"))  # Titan Embed v2 default
+    VECTOR_SIZE: int = int(os.getenv("VECTOR_SIZE", "384"))  # all-MiniLM-L6-v2
 
 
 class Neo4jConfig:
@@ -44,27 +44,32 @@ class SQLiteConfig:
 
 
 # ---------------------------------------------------------------------------
-# Amazon Bedrock configuration
+# Bedrock Mantle (OpenAI-compatible API) configuration
 # ---------------------------------------------------------------------------
 class BedrockConfig:
     REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
-    # Main chat model — Amazon Nova Pro (no Marketplace form needed, cost-effective)
-    # Switch to Claude 3.5 Haiku once Anthropic FTU form is submitted:
-    #   us.anthropic.claude-3-5-haiku-20241022-v1:0
+    # Mantle API endpoint and key
+    MANTLE_BASE_URL: str = os.getenv(
+        "MANTLE_BASE_URL",
+        "https://bedrock-mantle.us-east-1.api.aws/v1",
+    )
+    MANTLE_API_KEY: str = os.getenv("MANTLE_API_KEY", "")
+
+    # Chat model — Qwen3 32B (available on free-tier Mantle)
     CHAT_MODEL_ID: str = os.getenv(
         "BEDROCK_CHAT_MODEL_ID",
-        "us.amazon.nova-pro-v1:0",
+        "qwen.qwen3-32b-v1:0",
     )
-    # Entity extraction — Nova Lite is fast and cheap for structured extraction
+    # Entity extraction — Gemma 3 12B (fast, cheap)
     EXTRACTION_MODEL_ID: str = os.getenv(
         "BEDROCK_EXTRACTION_MODEL_ID",
-        "us.amazon.nova-lite-v1:0",
+        "google.gemma-3-12b-it",
     )
-    # Embedding model — Titan Embed Text v2 (Amazon-native, no form needed)
-    EMBED_MODEL_ID: str = os.getenv(
-        "BEDROCK_EMBED_MODEL_ID",
-        "amazon.titan-embed-text-v2:0",
+    # Local embedding model (sentence-transformers, no API needed)
+    LOCAL_EMBED_MODEL: str = os.getenv(
+        "LOCAL_EMBED_MODEL",
+        "all-MiniLM-L6-v2",
     )
     # Generation parameters
     MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))

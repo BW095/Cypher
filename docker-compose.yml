@@ -40,15 +40,16 @@ services:
       NEO4J_PASSWORD: "${NEO4J_PASSWORD:-please-change-me}"
       SQLITE_DB_PATH: /data/app.db
       UPLOAD_DIR: /data/uploads
-      # Amazon Bedrock — leave blank to use IAM role on EC2 (recommended).
+      # Bedrock Mantle (OpenAI-compatible API)
+      MANTLE_API_KEY: "${MANTLE_API_KEY}"
+      MANTLE_BASE_URL: "${MANTLE_BASE_URL:-https://bedrock-mantle.us-east-1.api.aws/v1}"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
-      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
-      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
-      # Model IDs — only pass if set in .env; otherwise Python config defaults apply.
-      # This avoids passing empty strings that override the Python-level defaults.
-      BEDROCK_CHAT_MODEL_ID: "${BEDROCK_CHAT_MODEL_ID:-us.amazon.nova-pro-v1:0}"
-      BEDROCK_EXTRACTION_MODEL_ID: "${BEDROCK_EXTRACTION_MODEL_ID:-us.amazon.nova-lite-v1:0}"
-      BEDROCK_EMBED_MODEL_ID: "${BEDROCK_EMBED_MODEL_ID:-amazon.titan-embed-text-v2:0}"
+      # Model IDs for Mantle
+      BEDROCK_CHAT_MODEL_ID: "${BEDROCK_CHAT_MODEL_ID:-qwen.qwen3-32b-v1:0}"
+      BEDROCK_EXTRACTION_MODEL_ID: "${BEDROCK_EXTRACTION_MODEL_ID:-google.gemma-3-12b-it}"
+      # Local embedding model (no API needed)
+      LOCAL_EMBED_MODEL: "${LOCAL_EMBED_MODEL:-all-MiniLM-L6-v2}"
+      VECTOR_SIZE: "${VECTOR_SIZE:-384}"
       CORS_ORIGINS: "*"
     volumes:
       - ${DOCUMENTS_DIR:-./documents}:/documents
