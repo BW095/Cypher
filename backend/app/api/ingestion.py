@@ -234,10 +234,14 @@ async def upload_file(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # Content-hash dedup: skip if unchanged
+    # Content-hash dedup: skip if unchanged or currently processing
     file_hash = content_hash or _hash_bytes(file_bytes)
-    if db.get_document_status(path_key) == "completed" \
-            and db.get_document_hash(path_key) == file_hash:
+    status = db.get_document_status(path_key)
+    
+    if status == "processing":
+        return {"status": "queued", "file": file.filename, "path": path_key}
+        
+    if status == "completed" and db.get_document_hash(path_key) == file_hash:
         return {"status": "unchanged", "file": file.filename, "path": path_key}
 
     # Save to upload dir
@@ -328,7 +332,9 @@ async def check_file_hashes(payload: dict):
         status = db.get_document_status(path_key)
         stored_hash = db.get_document_hash(path_key)
 
-        if status == "completed" and stored_hash == browser_hash:
+        if status == "processing":
+            up_to_date.append(local_path)
+        elif status == "completed" and stored_hash == browser_hash:
             up_to_date.append(local_path)
         else:
             needs_upload.append(local_path)
