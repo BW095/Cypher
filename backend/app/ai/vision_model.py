@@ -24,7 +24,7 @@ class QwenVLWrapper:
 
     def __init__(self, model_path=None, clip_path=None):
         # model_path / clip_path kept for API compat; ignored
-        self.model_id = BedrockConfig.CHAT_MODEL_ID
+        self.model_id = "qwen.qwen2-vl-72b-instruct-v1:0"
         self._client = None
 
     @property
