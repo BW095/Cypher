@@ -226,11 +226,17 @@ async def health_check():
 
     if _llm:
         try:
-            s = _llm.manager.status()
-            if s["loaded"]:
-                services["llm"] = f"loaded (n_gpu_layers={s['n_gpu_layers']})"
+            if hasattr(_llm, "manager"):
+                # Local GGUF provider — report GPU layer status
+                s = _llm.manager.status()
+                if s["loaded"]:
+                    services["llm"] = f"loaded (n_gpu_layers={s['n_gpu_layers']})"
+                else:
+                    services["llm"] = "configured (loads on first use)"
             else:
-                services["llm"] = "configured (loads on first use)"
+                # API provider (Bedrock, etc.) — always ready
+                provider = type(_llm).__name__.replace("LLMWrapper", "").replace("_", "") or "API"
+                services["llm"] = f"configured ({provider})"
         except Exception:
             services["llm"] = "configured"
     else:

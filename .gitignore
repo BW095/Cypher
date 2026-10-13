@@ -9,3 +9,6 @@ identifier.sqlite
 **/__pycache__/
 **/*.pyc
 models/
+aws_api_bedrock.txt
+*.env
+.env*

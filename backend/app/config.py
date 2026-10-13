@@ -126,6 +126,25 @@ class LLMConfig:
 
 
 # ---------------------------------------------------------------------------
+# AWS Bedrock provider (used when LLM_PROVIDER=bedrock)
+# ---------------------------------------------------------------------------
+class BedrockConfig:
+    # Provider switch: "local" uses the GGUF model manager;
+    # "bedrock" routes all LLM calls through AWS Bedrock.
+    PROVIDER: str = os.getenv("LLM_PROVIDER", "local")
+
+    # Amazon Nova Pro is the default; swap for any Bedrock model ID.
+    MODEL_ID: str = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0")
+
+    # AWS region that hosts the model (Nova Pro is available in us-east-1).
+    REGION: str = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+
+    # The new Bedrock API key (starts with ABSK…).  boto3 >= 1.35 reads
+    # AWS_BEARER_TOKEN_BEDROCK from the environment automatically.
+    BEARER_TOKEN: str = os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
+
+
+# ---------------------------------------------------------------------------
 # Server settings
 # ---------------------------------------------------------------------------
 class ServerConfig:
